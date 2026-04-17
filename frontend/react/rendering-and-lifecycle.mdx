@@ -1,0 +1,214 @@
+---
+title: "React rendering, lifecycle, and the Virtual DOM"
+description: "How React decides what to render, how the Virtual DOM and reconciliation algorithm work, and what happens at each stage of the rendering pipeline."
+---
+
+React's rendering model is what makes it both predictable and performant. Rather than manipulating the DOM directly every time state changes, React runs a two-phase pipeline — calculating what should change, then applying only those changes to the real DOM. Understanding this pipeline, and how the Virtual DOM fits into it, gives you a reliable mental model for diagnosing performance problems, reasoning about effect timing, and designing components that cooperate well with React's scheduler.
+
+<AccordionGroup>
+  <Accordion title="What is a React component?">
+    A React component is an **independent, reusable piece of UI code** that encapsulates a specific element or feature of the interface. Well-designed components follow the single-responsibility principle — each component does one thing clearly.
+
+    React supports two component styles, but modern code almost exclusively uses **function components** with hooks, which are more concise and easier to reason about than class components.
+
+    ```jsx
+    // Function component with props
+    function Button({ label, onClick }) {
+      return <button onClick={onClick}>{label}</button>;
+    }
+
+    // The same button reused in different contexts
+    <Button label="Save" onClick={handleSave} />
+    <Button label="Cancel" onClick={handleCancel} />
+    ```
+
+    When designing components, three things are worth weighing against each other:
+
+    - **Single responsibility** — a component that does too much becomes hard to test and maintain. Separating business logic from UI logic is the most common application of this principle.
+    - **Reusability** — if a component will appear in multiple contexts, design it to receive its behavior and data through props rather than hardcoding them internally.
+    - **Performance** — avoid unnecessary re-renders by keeping component scope tight and applying memoization selectively where profiling identifies a real bottleneck.
+
+    The most important judgment call is context-specific: a component that needs to be flexible and reusable calls for different design decisions than one that only ever appears in one place.
+  </Accordion>
+
+  <Accordion title="What is the Virtual DOM and how does React use it?">
+    The Virtual DOM is a **lightweight JavaScript representation of the real DOM tree**, kept in memory. Because direct DOM manipulation is expensive, React avoids touching the real DOM until it knows exactly what needs to change.
+
+    When state or props change, React follows three steps:
+
+    1. **State change** — a new Virtual DOM tree is generated for the affected component subtree.
+    2. **Reconciliation** — React's diffing algorithm compares the new Virtual DOM against the previous snapshot to identify exactly what changed.
+    3. **Re-render** — only the changed nodes are applied to the real DOM.
+
+    The diffing and comparison happen entirely in memory, which makes them fast. The real DOM write is deferred until React has a minimal set of changes ready.
+
+    <Note>
+      React's reconciliation algorithm reduces what would be an O(n³) tree comparison problem down to O(n) by applying two heuristics: elements of different types always produce different trees, and `key` props allow React to match list items across renders without comparing every child.
+    </Note>
+
+    **How the diffing heuristics work:**
+
+    When two elements have different types (e.g. a `<div>` replaced by a `<span>`), React discards the old subtree entirely and builds a new one from scratch — even if the children are identical. This is usually the right trade-off because different element types almost always mean completely different components.
+
+    When two elements have the same type, React keeps the existing node and updates only the changed attributes:
+
+    ```jsx
+    // Only className is updated — title and children are left untouched
+    <div className="before" title="stuff" />
+    <div className="after" title="stuff" />
+    ```
+
+    For list children, React uses the `key` prop to track which items moved, were added, or were removed — without re-creating unchanged items.
+  </Accordion>
+
+  <Accordion title="What are the render phase and commit phase?">
+    React's rendering pipeline splits into two distinct phases:
+
+    **Render phase** — React determines what the UI should look like based on current state and props. It generates a new Virtual DOM tree and diffs it against the previous one. No DOM writes happen here. Because this phase is pure calculation, React can pause, restart, or discard it mid-way — which is the foundation of Concurrent Mode.
+
+    **Commit phase** — React takes the diff computed in the render phase and applies it to the real DOM. This phase runs synchronously and cannot be interrupted. After DOM updates are flushed, side-effect hooks like `useEffect` are scheduled to run.
+
+    ```
+    State/props change
+          ↓
+    [Render phase]  ← can be paused or restarted (Concurrent Mode)
+      New Virtual DOM created
+      Diffed against previous Virtual DOM
+          ↓
+    [Commit phase]  ← runs synchronously, cannot be interrupted
+      DOM updates applied
+      useEffect scheduled
+    ```
+
+    Two important properties follow from this design:
+
+    - **Staged progression** — after the render phase completes, React does not immediately run the commit phase. If a higher-priority update arrives, React can handle it first and commit later. This keeps the UI responsive.
+    - **Consistency** — because all changes are staged in the Fiber tree before the commit phase begins, the render and commit phases remain in sync. The DOM is never partially updated.
+  </Accordion>
+
+  <Accordion title="What is React's full re-rendering process? (Trigger → Render → Commit)">
+    React's re-rendering pipeline has three named stages:
+
+    **Trigger** — something causes a component to need re-rendering. The two sources are a state change (via `setState` / `useState` setter) and a props change propagated from a parent. React registers the affected component in an internal update queue.
+
+    **Render** — React calls the component function (or `render` method) to produce a new Virtual DOM tree, then diffs it against the previous tree. No real DOM changes happen yet.
+
+    **Commit** — React applies the minimal set of DOM changes identified in the render phase. Components untouched by the diff are left alone. After the DOM is updated, the browser paints the new frame and `useEffect` callbacks are scheduled.
+
+    ```jsx
+    function App() {
+      const [a, setA] = useState(0);
+      const [b, setB] = useState(0);
+
+      const handleClick = () => {
+        setA(a + 1);
+        setB(b + 1); // Both updates are batched → only one re-render
+      };
+
+      return <button onClick={handleClick}>Click</button>;
+    }
+    ```
+
+    <Note>
+      Calling `setState` does not always trigger an immediate re-render. React's automatic batching groups multiple state updates made in the same event handler (and, since React 18, in `setTimeout`, `Promise` callbacks, and native event handlers) into a single render pass.
+    </Note>
+  </Accordion>
+
+  <Accordion title="In what order does React execute code across parent and child components?">
+    Given this component tree:
+
+    ```jsx
+    function Parent() {
+      const [count, setCount] = useState(0);
+      console.log('1');
+
+      useEffect(() => {
+        console.log('2');
+        return () => { console.log('3'); };
+      }, [count]);
+
+      return (
+        <div>
+          <button onClick={() => setCount((prev) => prev + 1)}>+1</button>
+          <Child value={count} />
+        </div>
+      );
+    }
+
+    function Child({ value }) {
+      console.log('4');
+
+      useEffect(() => {
+        console.log('5');
+        return () => { console.log('6'); };
+      }, []);
+
+      return <p>{value}</p>;
+    }
+    ```
+
+    **On initial mount:** `1 → 4 → 5 → 2`
+
+    1. `Parent` renders first — logs `1`.
+    2. `Parent`'s render calls `Child` — logs `4`.
+    3. After the DOM is committed, `useEffect` callbacks run **bottom-up**: `Child`'s effect runs first — logs `5`.
+    4. Then `Parent`'s effect runs — logs `2`.
+
+    **On button click:** `1 → 4 → 3 → 2`
+
+    1. `Parent` re-renders — logs `1`.
+    2. `Child` re-renders (its `value` prop changed) — logs `4`.
+    3. Before `Parent`'s effect re-runs, its **cleanup function** from the previous render fires — logs `3`.
+    4. `Parent`'s new effect runs — logs `2`.
+    5. `Child`'s effect has an empty dependency array `[]`, so it does not re-run. Neither `5` nor `6` appear.
+
+    <Tip>
+      `useEffect` callbacks always run after the browser has painted. Cleanup functions run just before the next effect execution, not immediately when the dependency changes.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is batching update, and how did React 18 change it?">
+    **Batching** is React's mechanism for grouping multiple `setState` calls into a single re-render, reducing unnecessary work.
+
+    ```tsx
+    function handleClick() {
+      setCount(c => c + 1); // first update
+      setFlag(f => !f);     // second update
+      setName('React');     // third update
+      // All three are batched → only one re-render
+    }
+    ```
+
+    **Before React 18**, batching only applied inside React event handlers. Updates triggered from `setTimeout`, `Promise` callbacks, or native DOM event listeners each caused their own render:
+
+    ```tsx
+    // React 17 behavior
+    setTimeout(() => {
+      setCount(c => c + 1); // triggers a render
+      setFlag(f => !f);     // triggers another render (not batched)
+    }, 1000);
+    ```
+
+    **React 18** introduced **automatic batching**, which extends batching to all contexts — including async code:
+
+    ```tsx
+    // React 18 behavior
+    setTimeout(() => {
+      setCount(c => c + 1); // batched
+      setFlag(f => !f);     // batched → single re-render
+    }, 1000);
+
+    // Also batched in Promise callbacks:
+    fetchData().then(() => {
+      setData(result);  // batched
+      setLoading(false); // batched → single re-render
+    });
+    ```
+
+    If you ever need to opt out of batching and force a synchronous render, you can use `ReactDOM.flushSync()` — but this should be rare.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  When debugging unexpected re-renders, start with React DevTools Profiler. It shows exactly which components rendered, why, and how long each render took — making it far more efficient than adding `console.log` calls throughout the tree.
+</Tip>

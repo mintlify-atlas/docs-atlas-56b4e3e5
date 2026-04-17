@@ -1,0 +1,203 @@
+---
+title: "OS Memory and Scheduling: Interview Q&A"
+description: "OS interview Q&A on CPU scheduling, system calls, memory allocation strategies, page replacement algorithms, locality of reference, and pipelining."
+---
+
+Operating system internals — scheduling, memory management, and hardware interaction — appear regularly in backend engineering interviews, particularly for roles that require understanding of performance bottlenecks. This page gathers the most relevant questions from the Maeil Mail archive, ranging from how the OS allocates CPU time to how data locality affects cache performance in Java.
+
+<AccordionGroup>
+
+  <Accordion title="What is disk access time and why is sequential I/O faster than random I/O?">
+    **Disk access time** is the total time needed to read or write a block of data on a traditional hard disk drive (HDD). It is the sum of three components:
+
+    | Component | What it measures |
+    |---|---|
+    | **Seek time** | Time for the read/write head to move to the correct track |
+    | **Rotational latency** | Time for the disk to spin until the target sector is under the head |
+    | **Transfer time** | Time to actually read or write the data once positioned |
+
+    **Why sequential access is faster than random access** — in sequential access, data is stored in contiguous sectors on nearby tracks, so the head moves very little and rotational latency is minimal. In random access, the head must physically move to different tracks for each read, and the disk must rotate to the correct sector each time. These mechanical movements accumulate into significant latency.
+
+    This is why databases, log systems, and file systems are designed to write data sequentially wherever possible, and why SSDs (which have no moving parts) dramatically reduce random access penalties.
+
+    <Note>
+      Seek time is the dominant cost in random HDD access. On a modern HDD, average seek time is 5–10 ms; average rotational latency at 7200 RPM is about 4 ms. An SSD has neither, giving it random access times under 0.1 ms.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is CPU scheduling and what algorithms are used?">
+    **CPU scheduling** is the OS mechanism that decides which process or thread runs on the CPU at any given moment. Without it, critical processes might starve while low-priority work runs indefinitely.
+
+    **Preemptive vs non-preemptive:**
+    - **Preemptive** — the OS can forcibly remove a process from the CPU (lower response time, higher context-switch overhead, risk of race conditions).
+    - **Non-preemptive** — a process runs until it blocks or exits voluntarily (lower overhead, but poor responsiveness if a long job runs first).
+
+    **Common algorithms:**
+
+    | Algorithm | Type | Key property | Problem |
+    |---|---|---|---|
+    | FCFS | Non-preemptive | First come, first served | Convoy effect: short jobs wait behind long ones |
+    | SJF | Non-preemptive | Shortest job runs first; minimises average wait | Starvation of long jobs |
+    | Round Robin (RR) | Preemptive | Each process gets a fixed time slice | Too-large slice → convoy; too-small → excessive context switching |
+    | SRT | Preemptive | Shortest remaining time first; preempts if a shorter job arrives | Starvation of long jobs |
+    | Multilevel Queue | Preemptive | Multiple priority queues; each queue has its own algorithm | Starvation in lower queues |
+    | Multilevel Feedback Queue | Preemptive | Like multilevel queue with aging to prevent starvation | Most complex to configure |
+
+    **Starvation and aging** — priority-based schedulers can indefinitely delay low-priority processes. **Aging** gradually raises the priority of a process the longer it waits, ensuring it eventually gets CPU time. Multilevel Feedback Queue Scheduling incorporates aging by moving long-waiting processes to higher-priority queues.
+  </Accordion>
+
+  <Accordion title="What is a system call and what is the role of user mode vs kernel mode?">
+    The OS protects hardware resources (CPU, memory, disk, network) from direct access by user programs. Unrestricted hardware access would let any bug or malicious program corrupt the entire system.
+
+    The mechanism is **dual mode execution**:
+
+    - **User mode** — the CPU executes application code. Direct hardware access instructions are forbidden. All programs run in user mode by default.
+    - **Kernel mode** — the CPU can execute any instruction, including hardware access. Only the OS kernel runs in kernel mode.
+
+    When a user-mode program needs a kernel service (read a file, open a socket, allocate memory beyond the stack), it issues a **system call**. A system call is a software interrupt that:
+
+    1. Saves the program's current state (registers, program counter).
+    2. Switches the CPU to kernel mode.
+    3. Runs the appropriate **interrupt service routine** (ISR) in the kernel.
+    4. Returns results to the program and switches back to user mode.
+    5. Restores the program's state and resumes execution.
+
+    ```
+    Application code (user mode)
+          │
+          │  open("file.txt")  ← system call
+          ▼
+    Kernel (kernel mode)
+          │  file system access, disk I/O
+          │
+          ▼
+    Return result to application (back to user mode)
+    ```
+
+    System calls are the only legitimate path from user mode to kernel mode. This boundary is what lets the OS enforce security and resource isolation between processes.
+  </Accordion>
+
+  <Accordion title="What is contiguous memory allocation and what are internal vs external fragmentation?">
+    **Contiguous memory allocation** assigns each process a single, unbroken block of physical memory. The OS manages this space using either fixed or variable partition schemes.
+
+    **External fragmentation** (variable-size allocation) — free blocks accumulate in scattered small pieces. Even if the total free space is sufficient for a new process, no single contiguous block is large enough:
+
+    ```
+    Used | 50 MB free | Used | 80 MB free | Used | 100 MB free
+    
+    Need 200 MB contiguous → fails even though 230 MB is free in total
+    ```
+
+    **Internal fragmentation** (fixed-size allocation) — a process is assigned a partition larger than it needs. The leftover space within the partition is wasted:
+
+    ```
+    Process needs 300 MB → assigned 512 MB partition → 212 MB wasted inside
+    ```
+
+    **Placement strategies for variable-size allocation:**
+
+    | Strategy | Description | Trade-off |
+    |---|---|---|
+    | First fit | Allocates the first sufficiently large free block | Fast; may leave small fragments at the front |
+    | Best fit | Allocates the smallest block that fits | Minimises waste per allocation; produces many tiny leftovers |
+    | Worst fit | Allocates the largest available block | Leaves larger fragments; often performs worst in practice |
+
+    Modern operating systems use **paging** and **virtual memory** to eliminate external fragmentation by mapping non-contiguous physical frames to a contiguous virtual address space.
+  </Accordion>
+
+  <Accordion title="What are page replacement algorithms in virtual memory management?">
+    **Virtual memory** allows a process's address space to be larger than physical RAM by keeping only active pages in memory. **Demand paging** loads a page only when it is first accessed. When physical memory is full and a new page must be loaded, the OS must evict an existing page — the choice is made by a **page replacement algorithm**.
+
+    **Common algorithms:**
+
+    | Algorithm | Eviction criterion | Notes |
+    |---|---|---|
+    | **FIFO** | Oldest-loaded page | Simple; may evict frequently used pages (Bélády's anomaly) |
+    | **OPT** (Optimal) | Page not used for the longest future time | Theoretical benchmark; requires knowledge of the future |
+    | **LRU** | Least Recently Used | Good approximation of OPT; requires tracking last-access time |
+    | **LFU** | Least Frequently Used | Requires tracking access counts; tie-breaking needed |
+    | **NUR** | Not Used Recently | Uses reference and dirty bits from the page table; lower overhead than LRU/LFU |
+
+    LRU, LFU, NUR, and FIFO variants are **approximation algorithms** — they estimate future access patterns from historical data. OPT is the theoretical upper bound used to evaluate other algorithms.
+
+    A **page fault** occurs when the referenced page is not in physical memory. Frequent page faults (called **thrashing**) can cripple performance if the working set of active pages exceeds available RAM.
+
+    <Tip>
+      LRU is the most commonly asked-about algorithm in interviews. Be ready to explain both why it works well (temporal locality) and why it is expensive to implement precisely (requires tracking access timestamps for every page).
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the locality of reference principle and how does it affect performance?">
+    The **locality of reference** (also called the principle of locality) describes two observed tendencies in how programs access memory:
+
+    - **Temporal locality** — a memory location that was accessed recently is likely to be accessed again soon (e.g., a loop counter, a frequently called method).
+    - **Spatial locality** — a memory location that was accessed is likely to be followed by access to nearby locations (e.g., iterating through an array).
+
+    CPU caches exploit both principles: they prefetch adjacent cache lines (spatial) and keep recently used data in fast cache (temporal).
+
+    **Java example — column-major vs row-major traversal:**
+
+    ```java
+    int size = 10240;
+    int[][] array = new int[size][size];
+
+    // Column-major (bad cache behaviour): 577 ms
+    for (int j = 0; j < size; j++) {
+        for (int i = 0; i < size; i++) {
+            array[i][j]++; // jumps across independent int[] objects in memory
+        }
+    }
+
+    // Row-major (good cache behaviour): 28 ms
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+            array[i][j]++; // traverses one int[] sequentially — cache-friendly
+        }
+    }
+    ```
+
+    In Java, a 2D array is an array of `int[]` references, and each inner array is a separate heap object. Column-major traversal jumps between these objects — memory locations that may be far apart — causing frequent cache misses. Row-major traversal walks one inner array at a time, accessing contiguous memory and maximising cache hit rate.
+
+    The same principle explains why database indexes perform well (sorted data is spatially local) and why sequential file reads outperform random reads.
+  </Accordion>
+
+  <Accordion title="What is instruction pipelining and what are pipeline hazards?">
+    **Instruction pipelining** allows a CPU to overlap the execution of multiple instructions by dividing each instruction into sequential stages (fetch, decode, execute, memory access, write-back) and processing a different instruction in each stage simultaneously.
+
+    Without pipelining, each instruction must complete all stages before the next one starts. With pipelining, throughput approaches one instruction per clock cycle (ignoring hazards).
+
+    **Pipeline hazards** are situations where the pipeline cannot proceed at full speed:
+
+    **Data hazard** — instruction B depends on the result of instruction A that has not yet completed:
+
+    ```
+    ADD R1, R2, R3   ← produces R1
+    MOV R4, R1       ← needs R1 before ADD writes it back
+    ```
+
+    The CPU must stall or forward the result from an earlier stage.
+
+    **Control hazard** — a branch instruction means the next instruction to fetch is unknown:
+
+    ```
+    IF condition GOTO label
+    // CPU doesn't know whether to fetch label or the next line
+    ```
+
+    Modern CPUs use **branch prediction** to speculatively execute the likely path. A misprediction flushes the pipeline and wastes cycles.
+
+    **Structural hazard** — two instructions simultaneously need the same hardware resource (e.g., both need the ALU or a memory bus):
+
+    ```
+    Instruction A uses the multiplier unit
+    Instruction B also needs the multiplier unit at the same cycle → stall
+    ```
+
+    Processor designers mitigate structural hazards through resource duplication (multiple ALUs, split instruction/data caches) and out-of-order execution.
+
+    <Note>
+      Branch misprediction penalties are one of the most significant performance bottlenecks in modern CPUs. This is why tight loops with unpredictable conditions (`if` inside a loop over random data) can be surprisingly slow.
+    </Note>
+  </Accordion>
+
+</AccordionGroup>

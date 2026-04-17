@@ -1,0 +1,338 @@
+---
+title: "Frontend Performance Optimization: React and Next.js"
+description: "Interview Q&A on React memoization, code splitting, image optimization, Core Web Vitals (LCP, INP, CLS), and Chrome DevTools performance profiling."
+---
+
+Performance optimization spans multiple layers of a frontend application — from component render cycles and bundle sizes, to image delivery strategies and the metrics search engines use to rank pages. This page consolidates the most important interview topics in this area, drawn from real-world engineering discussions about diagnosing and fixing performance regressions in production Next.js and React applications.
+
+<AccordionGroup>
+  <Accordion title="What are the main React performance optimization techniques?">
+    React re-renders a component whenever its state or props change. In most cases this is fast and invisible to the user, but in large component trees or components with expensive render logic, unnecessary re-renders accumulate into noticeable jank. The primary tools for addressing this fall into two categories: **memoization** and **code splitting**.
+
+    **Memoization**
+
+    `React.memo` wraps a component and prevents it from re-rendering when its props have not changed (using a shallow comparison by default):
+
+    ```tsx
+    const ProductCard = React.memo(function ProductCard({ product }: { product: Product }) {
+      return (
+        <div>
+          <h3>{product.name}</h3>
+          <p>{product.price}</p>
+        </div>
+      );
+    });
+    ```
+
+    `useCallback` memoizes a function reference so it remains stable between renders. Without it, a new function object is created on every render, causing any child component receiving that function as a prop to re-render even when `React.memo` is applied:
+
+    ```tsx
+    const handleAddToCart = useCallback((productId: string) => {
+      dispatch({ type: 'ADD_TO_CART', payload: productId });
+    }, [dispatch]);
+    ```
+
+    `useMemo` memoizes a computed value, preventing expensive recalculations when unrelated state changes:
+
+    ```tsx
+    const sortedProducts = useMemo(
+      () => [...products].sort((a, b) => a.price - b.price),
+      [products] // Only recalculate when `products` changes
+    );
+    ```
+
+    **Code Splitting**
+
+    Loading the entire JavaScript bundle on the first visit wastes bandwidth on code the user may never need. Code splitting divides the bundle into smaller chunks that are loaded on demand.
+
+    `React.lazy` with `Suspense` loads a component dynamically — its chunk is only downloaded when the component is first rendered:
+
+    ```tsx
+    import { lazy, Suspense } from 'react';
+
+    const HeavyChart = lazy(() => import('./HeavyChart'));
+
+    function Dashboard() {
+      return (
+        <Suspense fallback={<div>Loading chart...</div>}>
+          <HeavyChart data={analyticsData} />
+        </Suspense>
+      );
+    }
+    ```
+
+    Route-level code splitting is particularly impactful in Next.js, which already splits each page into its own chunk by default. For client components with large dependencies, `dynamic()` from `next/dynamic` provides the same mechanism with Next.js-specific options:
+
+    ```tsx
+    import dynamic from 'next/dynamic';
+
+    const RichTextEditor = dynamic(() => import('./RichTextEditor'), {
+      ssr: false,       // Don't render on the server
+      loading: () => <Skeleton />,
+    });
+    ```
+
+    <Tip>
+      Apply memoization selectively. `React.memo`, `useCallback`, and `useMemo` all have a cost — the shallow comparison on every render. For simple, cheap components, memoization adds overhead without meaningful savings. Profile first, then optimize.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are general web application performance optimization strategies?">
+    Beyond React-specific techniques, frontend performance optimization involves browser loading mechanics, resource delivery strategies, and asset management.
+
+    **Code splitting and lazy loading**
+
+    These are as relevant at the application level as at the component level. Splitting vendor libraries from application code allows browsers to cache stable third-party code independently from frequently changing app code.
+
+    **Lazy loading for media resources**
+
+    Deferring image and video loading until they enter (or are about to enter) the viewport significantly reduces the initial page weight:
+
+    ```html
+    <!-- Native browser lazy loading — no JavaScript required -->
+    <img src="product.jpg" alt="Product photo" loading="lazy" />
+    ```
+
+    For more control, an `IntersectionObserver` can trigger custom loading logic when an element becomes visible.
+
+    **Image optimization**
+
+    - Convert images to WebP or AVIF — these modern formats are typically 25–50% smaller than JPEG at equivalent visual quality.
+    - Serve appropriately sized images — loading a 3000px image to display at 300px wastes bandwidth and increases decode time.
+    - Use `srcset` and `sizes` for responsive images so the browser selects the optimal resolution for the device:
+
+    ```html
+    <img
+      src="product-800.jpg"
+      srcset="product-400.jpg 400w, product-800.jpg 800w, product-1600.jpg 1600w"
+      sizes="(max-width: 600px) 400px, (max-width: 1200px) 800px, 1600px"
+      alt="Product photo"
+    />
+    ```
+
+    **Caching**
+
+    Set appropriate `Cache-Control` headers for static assets. Immutable assets (hashed filenames) can be cached indefinitely:
+
+    ```
+    Cache-Control: public, max-age=31536000, immutable
+    ```
+
+    HTML documents and API responses that change frequently should use shorter TTLs or `no-cache` with ETags for revalidation.
+
+    **JavaScript loading strategies**
+
+    Render-blocking scripts delay the browser from displaying content. Use `defer` or `async` to prevent this:
+
+    ```html
+    <!-- defer: downloads in parallel, executes after HTML is parsed -->
+    <script src="analytics.js" defer></script>
+
+    <!-- async: downloads in parallel, executes immediately when ready -->
+    <script src="widget.js" async></script>
+    ```
+
+    Use `defer` for scripts that need access to the DOM. Use `async` only for truly independent scripts (analytics, ads) that do not depend on other scripts or DOM state.
+
+    **CDN distribution**
+
+    Serving static assets from a CDN reduces latency by delivering files from a node geographically close to the user. Most Next.js hosting platforms (Vercel, Cloudflare, AWS CloudFront) handle CDN distribution automatically.
+
+    <Note>
+      Performance optimization should always be driven by measurement. Use Lighthouse or Chrome DevTools to identify the actual bottlenecks before investing effort. Optimizing something that is not a bottleneck wastes time and can introduce bugs.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How do you optimize images on the web?">
+    Images are consistently the largest contributor to page weight and load time. A systematic approach covers four areas: format choice, sizing, delivery timing, and distribution.
+
+    **1. Format optimization**
+
+    Modern formats outperform JPEG and PNG significantly in file size at the same perceived quality:
+
+    | Format | Browser support | Typical size reduction vs JPEG |
+    |--------|----------------|-------------------------------|
+    | WebP | All modern browsers | ~25–35% smaller |
+    | AVIF | Chrome, Firefox, Safari 16+ | ~40–50% smaller |
+    | JPEG XL | Limited (behind flags) | ~60% smaller (future) |
+
+    For compatibility with older browsers, use the `<picture>` element with fallbacks:
+
+    ```html
+    <picture>
+      <source srcset="hero.avif" type="image/avif" />
+      <source srcset="hero.webp" type="image/webp" />
+      <img src="hero.jpg" alt="Hero image showing the product in use" />
+    </picture>
+    ```
+
+    The browser tries each `<source>` in order and falls back to the `<img>` if none are supported.
+
+    **2. Size optimization**
+
+    Never deliver more pixels than the browser will display. Tools like Sharp (Node.js), Squoosh, or cloud image services (Cloudinary, Imgix) can resize images to the exact dimensions needed for each breakpoint.
+
+    For responsive layouts, use `srcset` with width descriptors so the browser automatically selects the appropriate resolution based on the viewport and device pixel ratio.
+
+    **3. Lazy loading**
+
+    Images below the fold should not be loaded on initial page render. The HTML `loading="lazy"` attribute is now supported by all modern browsers and requires no JavaScript:
+
+    ```html
+    <img src="gallery-photo.jpg" alt="Gallery photo" loading="lazy" width="800" height="600" />
+    ```
+
+    Always specify `width` and `height` on lazy-loaded images to reserve space in the layout. Without dimensions, the browser cannot reserve the correct space, causing a Cumulative Layout Shift when the image loads.
+
+    **4. CDN delivery**
+
+    Images served through a CDN are cached at edge nodes worldwide, reducing round-trip time for users far from the origin server. CDN image services also often handle on-the-fly format conversion and resizing.
+
+    **In Next.js:**
+
+    `next/image` handles all four of these concerns automatically — format negotiation, responsive sizing, lazy loading, and (when deployed to Vercel) CDN delivery. For external image sources, configure the allowed domains:
+
+    ```js
+    // next.config.js
+    module.exports = {
+      images: {
+        remotePatterns: [
+          { protocol: 'https', hostname: 'images.unsplash.com' },
+          { protocol: 'https', hostname: 'cdn.mystore.com' },
+        ],
+      },
+    };
+    ```
+
+    <Tip>
+      Always explicitly specify `width` and `height` on your images — or use CSS `aspect-ratio` — to prevent layout shifts during loading. This directly improves your CLS (Cumulative Layout Shift) score.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are Core Web Vitals and how do you improve each one?">
+    **Core Web Vitals** are a set of metrics defined by Google to quantify real-world user experience. They directly influence Google Search ranking and serve as a useful proxy for overall page quality.
+
+    The three current Core Web Vitals are **LCP**, **INP**, and **CLS**.
+
+    ---
+
+    **LCP — Largest Contentful Paint**
+
+    Measures the time from navigation start until the largest visible content element (image, video, or block-level text) finishes rendering.
+
+    - **Good:** ≤ 2.5 seconds
+    - **Needs improvement:** 2.5s – 4.0s
+    - **Poor:** > 4.0 seconds
+
+    The LCP element is almost always a hero image or a headline. To improve LCP:
+
+    - Add `priority` to the `<Image>` component (or `<link rel="preload">`) for above-the-fold images.
+    - Convert images to WebP/AVIF to reduce download time.
+    - Optimize server response time (TTFB) — a slow server pushes every metric later.
+    - Eliminate render-blocking resources (CSS, synchronous JS) that delay the browser from painting.
+
+    ---
+
+    **INP — Interaction to Next Paint**
+
+    Replaced FID in March 2024. INP measures the worst-case interaction latency across the entire page visit — the delay between a user action (click, tap, key press) and the browser rendering the visual response. Lower is better.
+
+    - **Good:** ≤ 200 milliseconds
+    - **Needs improvement:** 200ms – 500ms
+    - **Poor:** > 500 milliseconds
+
+    To improve INP:
+
+    - Reduce long tasks on the main thread (tasks over 50ms block input handling).
+    - Break heavy JavaScript into smaller chunks using `setTimeout` or `scheduler.postTask`.
+    - Move non-critical work off the main thread with Web Workers.
+    - Reduce the amount of JavaScript executed on each interaction.
+
+    ---
+
+    **CLS — Cumulative Layout Shift**
+
+    Measures the total visual instability — how much page elements move unexpectedly while the user is viewing or interacting with the page.
+
+    - **Good:** ≤ 0.1
+    - **Needs improvement:** 0.1 – 0.25
+    - **Poor:** > 0.25
+
+    Common causes of CLS and their fixes:
+
+    | Cause | Fix |
+    |-------|-----|
+    | Images without dimensions | Always set `width` and `height` attributes |
+    | Web fonts causing text reflow | Use `font-display: optional` or `swap` with a size-similar fallback |
+    | Dynamically injected banners/ads | Reserve space with a fixed-height container |
+    | Late-loading embeds (video, maps) | Use aspect-ratio containers |
+
+    ---
+
+    **Beyond Core Web Vitals — FCP and TTFB:**
+
+    While not part of the Core Web Vitals set, these metrics are strong diagnostic indicators:
+
+    - **FCP (First Contentful Paint)** — time until the first text or image appears. Google considers ≤ 1.8s good. Above 3 seconds, bounce rates increase sharply.
+    - **TTFB (Time to First Byte)** — time until the browser receives the first byte of the response. A high TTFB indicates server-side issues (slow database queries, cold starts, long middleware chains).
+
+    <Note>
+      Core Web Vitals are measured using real user data (field data) via the Chrome User Experience Report (CrUX), not just lab measurements. A page that scores well in Lighthouse may still have poor field data if the user population is on slow devices or networks. Aim to improve both lab and field metrics.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How do you use Chrome DevTools to identify and fix performance issues?">
+    Chrome DevTools provides five primary tabs for diagnosing frontend performance problems. Each targets a different class of issue.
+
+    **Performance tab — rendering timeline**
+
+    Record a page load or interaction to capture a detailed flame chart of all browser activity: JavaScript parsing, style recalculation, layout, paint, and composite. Key metrics surfaced here include:
+
+    - **FCP** — first contentful paint marker
+    - **LCP** — largest contentful paint marker
+    - **TBT (Total Blocking Time)** — total time the main thread was blocked by long tasks (proxy for TTI)
+    - **CLS** — layout shift events shown as red markers in the timeline
+
+    Long yellow bars in the flame chart indicate JavaScript execution that is blocking rendering. These are the primary candidates for optimization.
+
+    **Lighthouse tab — automated audit**
+
+    Run a full audit to receive a scored report across Performance, Accessibility, Best Practices, and SEO. The Performance audit identifies specific opportunities (e.g., "Reduce unused JavaScript", "Serve images in modern formats", "Eliminate render-blocking resources") with estimated time savings for each.
+
+    Use Lighthouse in incognito mode to exclude the effect of browser extensions, which can inflate load times.
+
+    **Network tab — resource loading**
+
+    Inspect individual resource requests to identify:
+
+    - **TTFB** — time from request sent to first byte received (a high value points to a slow server, cold start, or database bottleneck).
+    - **Large transfer sizes** — assets that should be compressed or served in a more efficient format.
+    - **Waterfall blocking** — resources loaded sequentially that could be parallelized or deferred.
+
+    Filter by type (JS, CSS, Img, Fetch) and sort by size or duration to find the worst offenders.
+
+    **Memory tab — heap snapshots**
+
+    Take a Heap Snapshot and look for **Detached DOM Trees** — DOM nodes that have been removed from the document but are still referenced by JavaScript (closures, event listeners, global variables). These are the most common form of memory leak in React applications.
+
+    Compare two snapshots taken before and after a user interaction that you suspect is leaking memory. The delta view shows objects added but not collected.
+
+    **Coverage tab — unused code**
+
+    The Coverage tab shows exactly which lines of JavaScript and CSS are executed during page load. Red lines are code that was downloaded but not executed. A high percentage of unused JavaScript indicates that code splitting would reduce initial bundle size without affecting functionality.
+
+    ```
+    Workflow:
+    1. Open Coverage tab (Cmd+Shift+P → "Show Coverage")
+    2. Click the record button and reload the page
+    3. Stop recording
+    4. Sort by "Unused Bytes" descending
+    5. Identify large JS files with high unused percentages
+    6. Apply React.lazy / dynamic() to those modules
+    ```
+
+    <Tip>
+      For LCP optimization, check the Network tab's **Priority** column for your LCP resource. If it shows "Low", the browser is not prioritizing it. Add `<link rel="preload" as="image">` in your document `<head>` (or the `priority` prop on `next/image`) to elevate it to the highest priority.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

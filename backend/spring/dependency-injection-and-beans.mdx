@@ -1,0 +1,186 @@
+---
+title: "Dependency Injection and Spring Beans Interview Q&A"
+description: "Core interview questions on Spring DI, IoC, bean stereotypes (@Component, @Service, @Repository), and why Spring manages objects as beans."
+---
+
+Dependency injection and the Spring IoC container sit at the heart of every Spring application. Interview questions on these topics probe whether a candidate understands not just *how* to annotate a class, but *why* the container exists, what differences between stereotype annotations actually matter, and when different injection styles are appropriate. The questions below cover the most commonly tested concepts in this area, from the mechanics of DI to the practical consequences of choosing `@Component` over `@Repository`.
+
+<AccordionGroup>
+  <Accordion title="What is Dependency Injection and why does it matter?">
+    When object A needs object B to do its work, we say A *depends on* B. **Dependency Injection (DI)** is the pattern where a third party — typically the framework container — creates B and *delivers* it to A, rather than A constructing B itself.
+
+    **Why it matters:**
+
+    Without DI, A directly instantiates B:
+
+    ```java
+    public class OrderService {
+        // Tightly coupled: OrderService owns the lifecycle of EmailNotifier
+        private final EmailNotifier notifier = new EmailNotifier();
+    }
+    ```
+
+    With DI, the dependency is *injected* from outside:
+
+    ```java
+    public class OrderService {
+        private final NotificationService notifier; // interface, not a concrete class
+
+        public OrderService(NotificationService notifier) {
+            this.notifier = notifier;
+        }
+    }
+    ```
+
+    This decoupling means:
+    - `OrderService` can work with any `NotificationService` implementation without code changes.
+    - Testing is easy: inject a mock or stub.
+    - The application's object graph is described once in configuration and reused everywhere.
+
+    **Types of injection:**
+
+    | Type | When to use |
+    |---|---|
+    | **Constructor injection** | Preferred — dependencies are immutable and mandatory; circular dependency detected at startup |
+    | **Setter injection** | Optional dependencies; can combine with constructor injection |
+    | **Method injection** | Temporary/per-call dependencies that change on each invocation |
+
+    <Tip>
+      Constructor injection is generally preferred because it makes dependencies explicit, ensures the object is fully initialized when constructed, and makes the class easier to unit-test without a Spring context.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between @Component, @Service, @Controller, and @Repository?">
+    All four annotations register a class as a **Spring Bean** discoverable by `@ComponentScan`. `@Service`, `@Controller`, and `@Repository` each meta-annotate `@Component` — so they are specializations, not replacements.
+
+    | Annotation | Layer | Primary purpose |
+    |---|---|---|
+    | `@Component` | Any | Generic bean; use when no specific layer applies |
+    | `@Service` | Service / Domain | Marks a class that contains business logic |
+    | `@Controller` | Presentation | Marks a Spring MVC controller that handles web requests |
+    | `@Repository` | Data Access | Marks a class that interacts with the database |
+
+    **Can you replace `@Controller` or `@Repository` with plain `@Component`?**
+
+    Not without consequences.
+
+    1. **`@Controller` cannot be replaced** in Spring 6 / Spring Boot 3 and later. `RequestMappingHandlerMapping` only registers classes annotated with `@Controller` (checked via `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)`). Using `@Component` + `@RequestMapping` will no longer register the class as a handler, so web requests will not be routed to it.
+
+    ```java
+    // From Spring source — only @Controller is treated as a handler
+    @Override
+    protected boolean isHandler(Class<?> beanType) {
+        return AnnotatedElementUtils.hasAnnotation(beanType, Controller.class);
+    }
+    ```
+
+    2. **`@Repository` exception translation** — Spring's `PersistenceExceptionTranslationPostProcessor` wraps persistence-layer exceptions (e.g., JPA/Hibernate) into Spring's `DataAccessException` hierarchy, but only for beans annotated with `@Repository`. Replacing it with `@Component` loses this automatic exception translation.
+
+    3. **AOP pointcuts** — `@Service`, `@Controller`, and `@Repository` make it straightforward to target a specific architectural layer with AOP advice (e.g., applying logging only to the service layer). `@Component` blurs these boundaries.
+
+    <Warning>
+      Since Spring 6 (Spring Boot 3), using `@Component` on a class with `@RequestMapping` no longer registers it as an MVC handler. Always use `@Controller` or `@RestController` for web controllers.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Why does Spring manage objects as beans rather than letting developers instantiate them directly?">
+    Managing objects as beans through the Spring container (`BeanFactory` / `ApplicationContext`) provides benefits across multiple dimensions:
+
+    **1. Automatic dependency management**
+
+    The container wires dependencies automatically, and detects circular dependencies at startup — catching design errors before they become runtime failures.
+
+    ```kotlin
+    @Service
+    class OrderService(
+        private val productRepository: ProductRepository,  // injected automatically
+        private val paymentGateway: PaymentGateway         // injected automatically
+    )
+    ```
+
+    **2. Singleton lifecycle by default**
+
+    Spring manages beans as singletons by default, preventing redundant object creation and ensuring that two components using the same `UserRepository` share a single instance:
+
+    ```kotlin
+    @Service
+    class UserService(private val userRepository: UserRepository)
+
+    @Service
+    class AuthService(private val userRepository: UserRepository)
+    // Both receive the exact same UserRepository instance
+    ```
+
+    **3. Managed lifecycle hooks**
+
+    Spring calls lifecycle callbacks at the right moment, ensuring resources are initialized before use and released on shutdown:
+
+    ```kotlin
+    @Component
+    class DatabaseConnection {
+        @PostConstruct
+        fun initialize() { /* open connections, load caches */ }
+
+        @PreDestroy
+        fun cleanup() { /* release connections, flush buffers */ }
+    }
+    ```
+
+    **4. AOP support**
+
+    Only Spring-managed beans can have AOP advice (such as `@Transactional`, `@Cacheable`, or `@Async`) applied to them via proxies:
+
+    ```kotlin
+    @Service
+    class TransferService(private val accountRepository: AccountRepository) {
+        @Transactional
+        fun transferMoney(from: String, to: String, amount: BigDecimal) {
+            // transaction boundary managed transparently by AOP proxy
+        }
+    }
+    ```
+
+    **5. Testability**
+
+    Beans can be replaced with mocks or stubs in tests using `@MockBean`, without changing production code:
+
+    ```kotlin
+    @SpringBootTest
+    class UserServiceTest {
+        @MockBean
+        lateinit var userRepository: UserRepository
+
+        @Autowired
+        lateinit var userService: UserService
+
+        @Test
+        fun testGetUser() {
+            whenever(userRepository.findById(1L)).thenReturn(User(1L, "Test User"))
+            val result = userService.getUser(1L)
+            assertEquals("Test User", result.name)
+        }
+    }
+    ```
+
+    **6. Centralized configuration**
+
+    Infrastructure beans (data sources, connection pools, security filters) are defined once in `@Configuration` classes and reused throughout the application:
+
+    ```kotlin
+    @Configuration
+    class AppConfig {
+        @Bean
+        fun dataSource(): DataSource = HikariDataSource().apply {
+            jdbcUrl = "jdbc:postgresql://localhost:5432/mydb"
+            username = "user"
+            password = "password"
+            maximumPoolSize = 10
+        }
+    }
+    ```
+
+    <Note>
+      The sum of these benefits — consistent lifecycle, automatic wiring, AOP integration, and testability — is why Spring's container-managed model has become the standard approach for enterprise Java development.
+    </Note>
+  </Accordion>
+</AccordionGroup>

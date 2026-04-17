@@ -1,0 +1,104 @@
+---
+title: "How to Use This Archive Effectively"
+description: "Study strategies for navigating 302 technical interview questions by category, weakness, and topic to maximize your interview preparation."
+---
+
+This archive contains 302 technical interview questions across frontend and backend tracks. With that much material, how you navigate it matters as much as what you study. This page explains the two ways to browse questions, how to identify which topics deserve your focus, and how to build a study habit that holds up under real interview conditions.
+
+## Two ways to browse questions
+
+The source repository organizes questions two ways: by sequential ID (the order they were originally delivered by email) and by category (grouped by topic). This documentation site uses the category view, which is almost always the better starting point.
+
+<AccordionGroup>
+  <Accordion title="Browse by category (recommended)" defaultOpen={true}>
+    The category view groups questions by topic — for example, all React rendering questions are together, all JPA questions are together. This is the structure used throughout this archive.
+
+    Browsing by category lets you:
+
+    - Study a topic deeply in one session rather than hopping between unrelated questions
+    - Identify gaps in a specific area quickly
+    - Compare related questions side by side to understand nuance (for example, `useEffect` vs. `useLayoutEffect`, or optimistic vs. pessimistic locking)
+
+    Start here: pick one category that matches your current focus and work through it before moving to the next.
+  </Accordion>
+  <Accordion title="Browse by sequential ID">
+    The original archive also provides a sequential table of contents ordered by question ID (`fe-1` through `fe-150` for frontend, `be-1` through `be-152` for backend). This mirrors the order questions were delivered by email.
+
+    Sequential browsing is useful when you want to:
+
+    - Cover everything without a predefined path
+    - Simulate the original daily-email experience
+    - Avoid the structure of categories if you prefer to discover topics organically
+
+    The sequential TOC is available in the [source repository](https://github.com/maeil-mail/maeil-mail-contents) as `frontend/toc.md` and `backend/toc.md`.
+  </Accordion>
+</AccordionGroup>
+
+## Recommended study approaches
+
+<Steps>
+  <Step title="Identify your weaker areas first">
+    Before working through any section sequentially, spend 15–20 minutes scanning the category headings and reading two or three questions per section. Note where you feel uncertain — not just where you don't know the answer, but where you couldn't explain the answer clearly to another engineer. Those are your highest-priority sections.
+  </Step>
+  <Step title="Study one category per session">
+    Depth beats breadth in interview preparation. Pick one category and work through all its questions in a session. Read the question, try to answer it in your own words before reading the answer, then compare. This active recall approach retains significantly more than passive reading.
+  </Step>
+  <Step title="Write answers out loud or on paper">
+    Technical interviews are verbal. Reading an answer silently and understanding it is not the same as being able to explain it under pressure. After reading each answer, close the page and explain the concept out loud as if you were answering an interviewer. Do this especially for conceptual questions (what is the event loop, how does JPA manage entities).
+  </Step>
+  <Step title="Revisit tricky questions after 48 hours">
+    Spaced repetition works. Mark questions that you got wrong or that felt uncertain, and revisit them two days later. If you can explain them clearly on the second pass, move on. If not, add them to a third review cycle.
+  </Step>
+  <Step title="Connect concepts across categories">
+    Many topics in this archive intersect. For example, understanding HTTP caching (frontend: network and security) makes Next.js caching questions easier. Understanding JVM GC (backend: OS and concurrency) helps with Java memory questions. When you finish a category, spend a few minutes linking it to related sections.
+  </Step>
+</Steps>
+
+## Topic coverage at a glance
+
+### Frontend (150 questions)
+
+| Category | Topics covered | Questions |
+|---|---|---|
+| JavaScript fundamentals | Closures, event loop, promises, prototypes, functional programming | 31 |
+| React core | Rendering, hooks, state, Error Boundaries, concurrent mode | 21 |
+| Next.js & architecture | SSR, server components, streaming, caching, middleware | 14 |
+| Browser, DOM & Web APIs | Rendering pipeline, events, storage, accessibility, Web APIs | 19 |
+| CSS & UX | Flexbox/Grid, specificity, units, Core Web Vitals, DevTools | 15 |
+| TypeScript & tooling | Type system, bundlers, modules, monorepos, package managers | 21 |
+| Network, security & caching | CORS, JWT, Cache-Control, TLS, XSS, cookies | 20 |
+| Testing & quality | E2E testing, TDD, cohesion/coupling, engineering judgment | 6 |
+
+### Backend (152 questions)
+
+| Category | Topics covered | Questions |
+|---|---|---|
+| Spring & application layer | MVC flow, DI, transactions, AOP, exception handling | 21 |
+| Persistence & databases | JPA, Hibernate, N+1, indexes, isolation levels, normalization | 25 |
+| Networking & HTTP | TCP, HTTP/REST, load balancing, HTTPS, DNS, proxies | 25 |
+| Distributed systems & infra | Caching, Redis, CAP theorem, CQRS, CI/CD, zero-downtime deployment | 17 |
+| OS, concurrency & JVM | Threads, deadlocks, GC, memory, scheduling, coroutines | 22 |
+| Java language & data structures | Exceptions, generics, collections, hash collisions, trees | 21 |
+| Architecture & design patterns | SOLID, OOP, strategy pattern, singleton, template method | 9 |
+| Testing, security & observability | TDD, test doubles, coverage, CSRF, SQL injection, Micrometer | 11 |
+
+## Tips for interview preparation
+
+<Tip>
+  If you have a specific company or role in mind, prioritize the categories most relevant to that stack. Frontend interviews at React-heavy companies will emphasize React core and Next.js. Backend interviews at companies running Spring Boot microservices will emphasize Spring, JPA, and distributed systems.
+</Tip>
+
+<Note>
+  Questions in this archive range from junior to senior level. If you're preparing for a junior role, focus on the foundational sections: JavaScript fundamentals, React core, Spring and the application layer, and Java language fundamentals. Senior-level preparation should include distributed systems, architecture, and the more nuanced questions in networking and concurrency.
+</Note>
+
+## Start browsing
+
+<CardGroup cols={2}>
+  <Card title="Frontend questions" icon="browser" href="/frontend/javascript/closures-and-scope">
+    150 questions across JavaScript, React, Next.js, browser internals, CSS, TypeScript, networking, and testing.
+  </Card>
+  <Card title="Backend questions" icon="server" href="/backend/spring/mvc-and-request-handling">
+    152 questions across Spring, JPA, databases, networking, distributed systems, Java, and architecture.
+  </Card>
+</CardGroup>

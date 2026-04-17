@@ -1,0 +1,214 @@
+---
+title: "Concurrent Mode and Strict Mode in React 18"
+description: "How React's Concurrent Mode enables interruptible rendering and priority scheduling, which APIs expose it, and what Strict Mode does to help catch bugs early."
+---
+
+React 18 shipped two features — Concurrent Mode and a strengthened Strict Mode — that change how React schedules and validates work. Concurrent Mode is the more fundamental of the two: it replaces React's previously synchronous, all-or-nothing rendering model with one where work can be paused, resumed, and prioritized. Strict Mode is a development-only tool that actively exercises the assumptions Concurrent Mode relies on, making bugs visible before they reach production. Together they represent the foundation of React's performance model for modern applications.
+
+<AccordionGroup>
+  <Accordion title="What is Concurrent Mode and what problem does it solve?">
+    In React's original rendering model, every update was synchronous and uninterruptible. Once React started rendering a component tree, it ran the entire render to completion before yielding control back to the browser. For large trees or expensive computations, this could block the main thread long enough to drop frames and make the UI feel unresponsive.
+
+    **Concurrent Mode** changes this by making the render phase **interruptible**. React can now:
+
+    - **Pause** a render in progress and handle a higher-priority update first (such as a user click or keystroke).
+    - **Resume** the paused render later.
+    - **Discard** a render entirely if it's no longer needed (e.g., the user typed again before the previous search result was ready).
+
+    This is possible because the render phase was already pure computation — it never mutated the real DOM, only the Fiber tree in memory. Making it interruptible didn't change what it produced, only when.
+
+    ```
+    Old model (synchronous):
+    User types → React starts render → [blocked, can't interrupt] → render complete → paint
+
+    Concurrent Model:
+    User types → React starts render
+      → another keystroke arrives (higher priority)
+      → React pauses first render, handles keystroke
+      → React resumes first render (or discards if stale)
+      → paint
+    ```
+
+    The result for users: interactions like typing, clicking, and scrolling feel immediately responsive even when expensive background work is happening.
+  </Accordion>
+
+  <Accordion title="What APIs expose Concurrent Mode features?">
+    Concurrent Mode is not a single switch — it's a set of APIs that opt specific updates into concurrent behavior. You can adopt them incrementally.
+
+    **`startTransition`**
+
+    Marks a state update as non-urgent (a "transition"). React renders urgent updates first and defers the transition update to the background. The transition can be interrupted if something more urgent arrives.
+
+    ```jsx
+    import { useState, startTransition } from 'react';
+
+    function SearchPage() {
+      const [query, setQuery] = useState('');
+      const [results, setResults] = useState([]);
+
+      const handleChange = (e) => {
+        const value = e.target.value;
+
+        // Urgent: update the input immediately
+        setQuery(value);
+
+        // Non-urgent: the results list can wait
+        startTransition(() => {
+          setResults(filterResults(value));
+        });
+      };
+
+      return (
+        <>
+          <input value={query} onChange={handleChange} />
+          <ResultsList results={results} />
+        </>
+      );
+    }
+    ```
+
+    Without `startTransition`, updating a large results list on every keystroke could delay the input from reflecting the typed character. With it, the input updates instantly while the results list updates in the background.
+
+    **`useDeferredValue`**
+
+    Accepts a value and returns a deferred copy that lags behind when the system is busy. Useful when you can't easily split an update into urgent/non-urgent parts — for example, when a value comes from props rather than local state.
+
+    ```jsx
+    import { useState, useDeferredValue } from 'react';
+
+    function FilteredList({ items }) {
+      const [filter, setFilter] = useState('');
+      const deferredFilter = useDeferredValue(filter);
+
+      // The filtered list uses the deferred value — it may lag during fast typing
+      const filtered = items.filter(item =>
+        item.name.includes(deferredFilter)
+      );
+
+      return (
+        <>
+          <input value={filter} onChange={e => setFilter(e.target.value)} />
+          <List items={filtered} />
+        </>
+      );
+    }
+    ```
+
+    **When to apply concurrent features**
+
+    Concurrent APIs are most beneficial when:
+
+    - The user is typing or interacting at high frequency and the update is computationally expensive (search filtering, autocomplete).
+    - A heavy list or visualization needs to update while the rest of the UI stays responsive.
+    - Animated transitions or immediate feedback need to coexist with a slower background update.
+
+    <Warning>
+      Applying `startTransition` or `useDeferredValue` indiscriminately across your application does not improve performance and can make behavior harder to reason about. Profile first, then target specific interactions where the main thread is genuinely blocked.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What does React Strict Mode do?">
+    `StrictMode` is a development-only wrapper component that activates additional checks and warnings in your application. It has no effect on the production build and produces no visible UI change.
+
+    ```jsx
+    // Typically placed at the root
+    import { StrictMode } from 'react';
+    import { createRoot } from 'react-dom/client';
+
+    createRoot(document.getElementById('root')).render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+    ```
+
+    Strict Mode does two things:
+
+    **1. Detects deprecated APIs and unsafe lifecycle methods**
+
+    It logs warnings if your code uses lifecycle methods that are scheduled for removal or have known issues in Concurrent Mode — such as `componentWillMount`, `componentWillReceiveProps`, or `componentWillUpdate`. It also warns about legacy string `ref` usage and several other patterns that don't work correctly with Concurrent features.
+
+    **2. Deliberately double-invokes functions to surface impurity**
+
+    React's Concurrent Mode requires that the render function and certain other operations are **pure** — meaning they can be called any number of times and produce the same result without side effects. Strict Mode enforces this by calling the following twice in development:
+
+    - Component render functions
+    - State initializer functions passed to `useState`
+    - Functions passed to `useMemo` and `useReducer`
+    - `constructor` in class components
+
+    If these functions are impure (e.g., they mutate external state, increment a counter, or have random behavior), the double invocation will produce inconsistent results that are immediately obvious in development — before they surface as subtle, hard-to-reproduce bugs in production.
+
+    ```jsx
+    // Impure render — will behave unexpectedly in Concurrent Mode
+    let count = 0;
+    function BadComponent() {
+      count++; // Side effect in render — will produce 2 instead of 1 in StrictMode
+      return <p>{count}</p>;
+    }
+
+    // Pure render — safe with Concurrent Mode
+    function GoodComponent({ value }) {
+      return <p>{value}</p>; // Same input → same output, always
+    }
+    ```
+
+    <Note>
+      The double invocation only happens in development mode. Production builds run functions once as normal. There is no performance impact in production.
+    </Note>
+
+    **Why this matters for Concurrent Mode**
+
+    Concurrent Mode can render the same component multiple times before committing any of the results. If render functions have side effects, those effects will run multiple times — producing incorrect behavior. Strict Mode's double invocation in development makes these issues visible before you ship.
+  </Accordion>
+
+  <Accordion title="When is Concurrent Mode actually necessary?">
+    Concurrent features are most valuable in situations where **responsiveness matters and a background computation is non-trivial**.
+
+    The clearest cases are:
+
+    **Search and autocomplete** — the user types at their own pace. Each keystroke needs to immediately update the input field (high priority), while filtering or sorting a large list of results can be deferred (low priority). Without `startTransition`, every keystroke blocks until the list update is done; with it, typing stays instant.
+
+    **Loading large datasets** — when a user is scrolling an existing list while new items load in the background, smooth scrolling is the high-priority work. Loading new items is lower priority. Concurrent scheduling keeps the scroll smooth even when additional render work is queued.
+
+    **Animated transitions** — when a UI transition needs to feel immediate (clicking a tab, opening a panel), the visual feedback should happen at the highest priority. Any expensive render triggered by the transition can run concurrently in the background.
+
+    ```jsx
+    // Smooth tab switching: the tab highlight updates immediately,
+    // the content pane renders in the background
+    function Tabs({ tabs }) {
+      const [selected, setSelected] = useState(0);
+      const [displayedContent, setDisplayedContent] = useState(tabs[0].content);
+
+      const handleTabClick = (index) => {
+        setSelected(index); // Urgent: highlight the active tab immediately
+
+        startTransition(() => {
+          setDisplayedContent(tabs[index].content); // Non-urgent: render content
+        });
+      };
+
+      return (
+        <>
+          {tabs.map((tab, i) => (
+            <button
+              key={tab.id}
+              onClick={() => handleTabClick(i)}
+              style={{ fontWeight: selected === i ? 'bold' : 'normal' }}
+            >
+              {tab.label}
+            </button>
+          ))}
+          <div>{displayedContent}</div>
+        </>
+      );
+    }
+    ```
+
+    If profiling shows your application is already responsive and no interactions are blocked, there is no benefit to adding concurrent APIs. They address a specific class of performance problem — main thread blocking during render — and should be applied precisely where that problem exists.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Enable Strict Mode throughout development, not just when you suspect a problem. Its double-invocation behavior catches purity violations that are otherwise invisible until they manifest as non-deterministic bugs in a production Concurrent Mode render.
+</Tip>

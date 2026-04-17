@@ -1,0 +1,217 @@
+---
+title: "Spring Transactions and AOP Interview Q&A"
+description: "Interview questions covering Spring transaction AOP flow, propagation levels, rollback rules, @Transactional on private methods, and OSIV."
+---
+
+Spring's declarative transaction management — driven by `@Transactional` and backed by AOP proxies — is one of the most powerful yet most frequently misunderstood areas of the framework. Interview questions here test not just surface knowledge of the annotation, but deep understanding of proxy mechanics, transaction propagation semantics, rollback rules, self-invocation pitfalls, and the Open Session In View pattern. Getting these right separates candidates who have merely *used* Spring transactions from those who truly understand them.
+
+<AccordionGroup>
+  <Accordion title="How does Spring's transaction AOP mechanism work internally?">
+    Declarative transaction management using `@Transactional` involves three core components: the **Transaction Manager**, the **Transaction AOP Proxy**, and the **Transaction Synchronization Manager**.
+
+    **Full flow when a transactional method is called:**
+
+    1. The calling code interacts with the **AOP proxy** (not the real bean directly). Spring replaces the bean in the container with a CGLIB or JDK dynamic proxy when it detects any AOP annotation.
+    2. The proxy acquires a **Transaction Manager** (`PlatformTransactionManager`) and asks it to begin a transaction.
+    3. The Transaction Manager obtains a database connection via the `DataSource` and starts the transaction.
+    4. The started connection is stored in the **Transaction Synchronization Manager** (a `ThreadLocal`-backed registry), making it available to all code running within the same thread.
+    5. The proxy delegates to the real bean method.
+    6. If the method completes normally, the proxy asks the Transaction Manager to **commit** the transaction.
+    7. If an exception escapes, the proxy triggers a **rollback** (subject to rollback rules — see below).
+    8. The Transaction Manager retrieves the connection from the Synchronization Manager, commits or rolls back, and releases or closes the connection.
+
+    **Transaction Manager abstraction**
+
+    Because JDBC and JPA manage transactions differently, Spring provides `PlatformTransactionManager` as an abstraction. Developers choose an implementation:
+    - `DataSourceTransactionManager` for plain JDBC
+    - `JpaTransactionManager` for JPA/Hibernate
+
+    **Transaction Synchronization Manager**
+
+    Without it, every method call deeper in the call stack would need to receive the database connection as a parameter. The Synchronization Manager stores the active connection in a `ThreadLocal`, so all repository and service calls within the same transaction automatically share the correct connection.
+  </Accordion>
+
+  <Accordion title="Why does @Transactional not work on private methods, and what is self-invocation?">
+    Spring AOP works by creating a **proxy** around the bean. When an external caller invokes a method on the proxy, the proxy intercepts the call and applies the transactional advice. However, there are two important limitations.
+
+    **Private methods**
+
+    - **JDK Dynamic Proxy** generates a proxy based on the target class's interfaces. Only `public` interface methods can be intercepted.
+    - **CGLIB Proxy** subclasses the target class. `private` methods cannot be overridden by a subclass, so they cannot be intercepted. `public`, `protected`, and package-private methods can be proxied with CGLIB.
+
+    Therefore, `@Transactional` on a `private` method has no effect — the transaction annotation is silently ignored.
+
+    **Self-invocation**
+
+    Even on a `public` method, `@Transactional` has no effect when the method is called from *within the same class* — because the call bypasses the proxy:
+
+    ```java
+    @Service
+    @RequiredArgsConstructor
+    public class SelfInvocation {
+
+        private final MemberRepository memberRepository;
+
+        // External call → goes through proxy → @Transactional works
+        @Transactional
+        public void saveWithPublic(Member member) {
+            memberRepository.save(member);
+            throw new RuntimeException("rollback test");
+        }
+
+        public void outerSaveWithPublic(Member member) {
+            // Internal call → bypasses proxy → @Transactional on saveWithPublic is IGNORED
+            saveWithPublic(member);
+        }
+    }
+    ```
+
+    In `outerSaveWithPublic`, the call to `saveWithPublic` is a direct Java method call on `this`, not on the proxy. The transaction never starts, so the `RuntimeException` does not cause a rollback.
+
+    **Solutions:**
+
+    1. **Inject the proxy into itself** (not recommended — introduces circular dependency):
+
+    ```java
+    @Service
+    public class SelfInvocation {
+        private final SelfInvocation selfInvocation; // proxy injected here
+
+        public void outerSave(Member member) {
+            selfInvocation.saveWithPublic(member); // goes through proxy
+        }
+    }
+    ```
+
+    2. **Split into separate classes** (preferred approach):
+
+    ```java
+    @Service
+    public class OuterTransactionService {
+        private final InnerTransactionService innerService;
+
+        @Transactional
+        public void outer() {
+            innerService.inner(); // goes through InnerTransactionService's proxy
+        }
+    }
+
+    @Service
+    public class InnerTransactionService {
+        @Transactional(propagation = Propagation.REQUIRES_NEW)
+        public void inner() { /* runs in its own independent transaction */ }
+    }
+    ```
+
+    3. **Use AspectJ compile-time or load-time weaving** — weaves advice directly into the bytecode, so even same-class calls are intercepted.
+
+    <Warning>
+      When two methods with different propagation settings live in the same class and one calls the other, the propagation setting of the inner method is completely ignored due to self-invocation. Always test this scenario explicitly.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the Spring transaction propagation levels and when should each be used?">
+    **Transaction propagation** determines what happens to the transaction boundary when a `@Transactional` method is called while a transaction already exists (or doesn't).
+
+    Configure it with `@Transactional(propagation = Propagation.XXX)`:
+
+    | Propagation | Existing transaction | No existing transaction |
+    |---|---|---|
+    | `REQUIRED` *(default)* | Join the existing transaction | Create a new transaction |
+    | `REQUIRES_NEW` | Suspend existing, create new | Create a new transaction |
+    | `MANDATORY` | Join the existing transaction | Throw `IllegalTransactionStateException` |
+    | `SUPPORTS` | Join the existing transaction | Run without a transaction |
+    | `NOT_SUPPORTED` | Suspend existing, run without | Run without a transaction |
+    | `NESTED` | Create a savepoint (nested) | Create a new transaction |
+    | `NEVER` | Throw exception | Run without a transaction |
+
+    **Key scenarios:**
+
+    - `REQUIRED` is the safe default for most service methods — participate in whatever transaction the caller started.
+    - `REQUIRES_NEW` is useful when an operation (e.g., audit logging) must commit independently of whether the outer transaction rolls back.
+    - `MANDATORY` enforces that a caller always provides a transaction — useful to prevent accidental non-transactional calls to critical methods.
+    - `NESTED` uses a JDBC savepoint so the inner operation can roll back independently while the outer transaction continues. Note that not all databases/drivers support savepoints.
+    - `NEVER` is a guard: throw an exception if the method is ever called inside a transaction.
+
+    <Note>
+      `REQUIRES_NEW` suspends the current transaction and opens a database connection for the new one. If both transactions hold connections from the same pool simultaneously, you risk connection pool exhaustion under load. Use `REQUIRES_NEW` judiciously.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Which exceptions trigger a rollback in Spring transactions?">
+    Spring's default rollback behavior follows this rule:
+
+    - **`RuntimeException` and `Error`** (unchecked) → **rollback**
+    - **Checked exceptions** (subclasses of `Exception` but not `RuntimeException`) → **no rollback** (commit)
+
+    **Rationale:**
+
+    Checked exceptions represent *expected* error conditions that the developer has explicitly handled (e.g., `IOException`, `SQLException`). Spring treats them as normal business outcomes and commits.
+
+    Unchecked exceptions (`NullPointerException`, `IllegalArgumentException`, etc.) indicate *unexpected* programming errors or system failures. Spring treats these as unrecoverable and rolls back.
+
+    Spring also converts all JDBC, JPA, and Hibernate persistence exceptions into its own `DataAccessException` hierarchy (all unchecked), ensuring consistent rollback behavior regardless of the underlying ORM.
+
+    **Overriding the defaults:**
+
+    ```java
+    // Roll back on a specific checked exception
+    @Transactional(rollbackFor = InsufficientFundsException.class)
+    public void transferFunds(Account from, Account to, BigDecimal amount)
+            throws InsufficientFundsException {
+        // ...
+    }
+
+    // Do NOT roll back on a specific unchecked exception
+    @Transactional(noRollbackFor = OptimisticLockingFailureException.class)
+    public void updateProductStock(Long productId, int delta) {
+        // ...
+    }
+    ```
+
+    **Comparison with Java EE / Jakarta EE:**
+
+    In container-managed transactions (CMT with EJB/CDI), unchecked exceptions also trigger automatic rollback by default. However, checked exceptions do not — and you must use `@ApplicationException(rollback = true)` to force a rollback on them. In programmatic transaction control, the developer is fully responsible for calling `rollback()` explicitly.
+  </Accordion>
+
+  <Accordion title="What is OSIV (Open Session In View) and what are its trade-offs?">
+    **OSIV (Open Session In View)** is a pattern that keeps the JPA `EntityManager` (Hibernate `Session`) open through the entire HTTP request, including the view rendering phase. Its primary benefit is enabling **lazy loading outside of a transaction** — for example, accessing a lazily-loaded collection directly in a Thymeleaf template.
+
+    **Original "transaction-per-request" OSIV (not recommended)**
+
+    A filter or interceptor opens a transaction at the start of the request and closes it at the end. The problem: the presentation layer can accidentally modify entities, and those modifications may be flushed to the database — leading to hard-to-debug side effects.
+
+    **Spring's OSIV implementation (the modern approach)**
+
+    Spring uses a smarter variant that decouples the persistence context lifetime from the transaction boundary:
+
+    1. A servlet filter or interceptor creates the `EntityManager` (persistence context) when the request arrives.
+    2. When a `@Transactional` service method starts, it reuses the already-open persistence context and begins a transaction.
+    3. When the service method finishes, the **transaction is committed and the context is flushed** — but the `EntityManager` remains open.
+    4. The controller and view can now read the entities and trigger lazy loading (no transaction = no writes flushed).
+    5. When the request finishes (back at the filter/interceptor), the `EntityManager` is finally closed. **No flush is performed** at this point.
+
+    **Problems with Spring's OSIV:**
+
+    1. **Accidental writes** — if a view modifies an entity and then a transactional method is called afterward in the same request, the change-detection flush at the end of that transaction may unexpectedly persist the modification.
+    2. **Connection pool pressure** — the database connection is held open for the entire duration of the request (including time spent rendering templates). Under high traffic, this can exhaust the connection pool.
+
+    **When to disable OSIV:**
+
+    ```yaml
+    # application.yml
+    spring:
+      jpa:
+        open-in-view: false
+    ```
+
+    Consider disabling when:
+    - Your application serves high traffic and connection pool efficiency is critical.
+    - You are using a read replica (split data sources) and OSIV could route reads to the wrong datasource.
+    - You can ensure all necessary data is loaded within the service layer (e.g., by using DTOs or explicit fetch joins).
+
+    <Note>
+      Spring Boot logs a warning at startup when `spring.jpa.open-in-view` is `true` (the default). This is intentional — the Spring team considers OSIV a potential footgun and wants developers to make a conscious choice.
+    </Note>
+  </Accordion>
+</AccordionGroup>

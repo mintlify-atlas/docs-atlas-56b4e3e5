@@ -1,0 +1,394 @@
+---
+title: "Security and Networking Browser Interview Questions"
+description: "Interview Q&A on CORS, HTTP, HTTPS, TLS handshake, JWT, XSS, CDN, OSI layers, TCP handshake, authentication vs authorization, and more."
+---
+
+Security and networking knowledge separates mid-level from senior frontend engineers. Interviewers test understanding of how browsers communicate with servers, the policies that govern cross-origin requests, the attack vectors that threaten web applications, and the authentication mechanisms used in production systems. This page covers the most commonly asked questions in this category.
+
+<AccordionGroup>
+  <Accordion title="What is CORS and how does it work?">
+    **CORS (Cross-Origin Resource Sharing)** is a browser mechanism that allows servers to declare which origins other than their own are permitted to load their resources.
+
+    By default, browsers enforce the **Same-Origin Policy (SOP)**: JavaScript running on `https://app.com` cannot read responses from `https://api.other.com` because they have different origins. An origin is defined by the combination of scheme, host, and port.
+
+    CORS relaxes this restriction through HTTP headers that the server includes in its responses:
+
+    ```http
+    # Allow requests from any origin
+    Access-Control-Allow-Origin: *
+
+    # Allow requests from a specific origin
+    Access-Control-Allow-Origin: https://app.com
+
+    # Allow specific HTTP methods
+    Access-Control-Allow-Methods: GET, POST, PUT, DELETE
+
+    # Allow specific request headers
+    Access-Control-Allow-Headers: Content-Type, Authorization
+    ```
+
+    CORS is enforced by the browser, not the server. The server still receives and processes the request — the browser is what blocks the JavaScript from reading the response if the headers are missing or incorrect.
+
+    **What SOP protects against:** SOP is the browser's primary defense against **CSRF (Cross-Site Request Forgery)** — attacks where a malicious page tricks the browser into making authenticated requests to another site using the victim's credentials.
+
+    <Note>
+      CORS configuration happens on the server. As a frontend engineer, you typically need to ask the backend team to add your domain to the allowed origins list. During development, a proxy server (e.g., Vite's `server.proxy`) can forward requests to avoid CORS restrictions locally.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How can you bypass the Same-Origin Policy without CORS?">
+    A **proxy server** can forward requests on behalf of the browser, avoiding SOP entirely. SOP only applies to browser-to-server communication — server-to-server communication is unrestricted.
+
+    The pattern works as follows:
+
+    1. The browser sends a request to its own origin: `https://client.com/api/data`
+    2. The client's server receives the request and forwards it to the external API: `https://server.com/data`
+    3. The client's server receives the external response and returns it to the browser
+
+    ```
+    Browser ──→ client.com/api/data (same origin, SOP satisfied)
+                        │
+                        ↓
+               client.com server ──→ server.com/data (server-to-server, no SOP)
+                        │
+                        ↑
+    Browser ←── response relayed back
+    ```
+
+    Because the browser only ever talks to `client.com`, there is no cross-origin request, and SOP never applies.
+
+    This is exactly what development proxies (Vite, webpack-dev-server, Next.js `rewrites`) do: they route API calls through the local dev server to avoid CORS during development.
+  </Accordion>
+
+  <Accordion title="What is HTTP and what is the difference between HTTP and HTTPS?">
+    **HTTP (Hypertext Transfer Protocol)** is the application-layer protocol used for communication between web browsers and servers. It is stateless — each request-response pair is independent. Requests contain a method (GET, POST, PUT, DELETE), a URL, headers, and optionally a body. Responses include a status code, headers, and a body.
+
+    **HTTP is not encrypted.** Data travels as plaintext over the network, making it vulnerable to interception by anyone positioned between the client and server (man-in-the-middle attacks).
+
+    **HTTPS (HTTP Secure)** is HTTP layered on top of TLS (Transport Layer Security). TLS encrypts all data in transit, ensuring:
+
+    - **Confidentiality** — no one intercepting the traffic can read it
+    - **Integrity** — data cannot be tampered with in transit
+    - **Authentication** — the server's identity is verified via a certificate signed by a trusted Certificate Authority
+
+    ```
+    HTTP:  client ──plaintext──→ server
+    HTTPS: client ──encrypted──→ server (TLS wraps everything)
+    ```
+
+    Modern browsers mark HTTP pages as "Not Secure" in the address bar. HTTPS is required for features like Service Workers, Geolocation, and Web Crypto.
+  </Accordion>
+
+  <Accordion title="What are HTTP request headers vs body, and what are common headers?">
+    An HTTP request has two distinct parts: **headers** and a **body**.
+
+    **Headers** carry metadata about the request — they tell the server *how to interpret* the data, not the data itself.
+
+    ```http
+    GET /api/users HTTP/1.1
+    Host: api.example.com
+    Content-Type: application/json
+    Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
+    Accept: application/json
+    Cache-Control: no-cache
+    ```
+
+    Common headers and their purpose:
+
+    | Header | Purpose |
+    |---|---|
+    | `Content-Type` | Declares the format of the request body |
+    | `Accept` | Declares what response format the client wants |
+    | `Authorization` | Carries credentials (Bearer token, Basic auth) |
+    | `Cache-Control` | Controls caching behavior |
+    | `Cookie` | Sends stored cookies to the server |
+
+    **Body** carries the actual data. It is used mainly with POST, PUT, and PATCH requests:
+
+    ```http
+    POST /api/users HTTP/1.1
+    Content-Type: application/json
+
+    {"name": "Alice", "email": "alice@example.com"}
+    ```
+
+    **Header size limits:** the HTTP spec does not define a maximum header size, but web servers typically enforce a limit of 8–16 KB. Exceeding this limit results in a `413 Content Too Large` response.
+  </Accordion>
+
+  <Accordion title="What is the Content-Type header and why is it important?">
+    `Content-Type` is an HTTP header that declares the media type (MIME type) of the data being sent. Both requests and responses include it. Without an accurate `Content-Type`, the receiving party may misinterpret the data.
+
+    ```http
+    # Sending JSON data
+    Content-Type: application/json
+
+    # Sending form data
+    Content-Type: application/x-www-form-urlencoded
+
+    # Uploading a file
+    Content-Type: multipart/form-data
+
+    # Server delivering HTML
+    Content-Type: text/html; charset=UTF-8
+    ```
+
+    **MIME type format:** `[type]/[subtype]` — for example `application/json`, `text/html`, `image/png`.
+
+    **`Content-Type` vs `Accept`:**
+    - `Content-Type` describes *what you are sending*
+    - `Accept` describes *what you want to receive* in the response
+
+    ```http
+    POST /api/convert HTTP/1.1
+    Content-Type: application/json   # I'm sending JSON
+    Accept: text/csv                 # I want CSV back
+    ```
+
+    Sending the wrong `Content-Type` causes the server to misparse the request body, often returning `415 Unsupported Media Type`.
+  </Accordion>
+
+  <Accordion title="What is the TCP 3-way handshake?">
+    The **3-way handshake** is the process TCP uses to establish a reliable connection between a client and server before any data is exchanged.
+
+    **Step 1 — SYN:** the client sends a SYN (synchronize) packet containing its initial sequence number (ISN).
+
+    **Step 2 — SYN-ACK:** the server acknowledges the client's SYN with a SYN-ACK packet. It includes the client's ISN + 1 (ACK) and the server's own ISN (SYN).
+
+    **Step 3 — ACK:** the client sends an ACK packet containing the server's ISN + 1. The connection is now established.
+
+    ```
+    Client          Server
+      │──── SYN ────→│
+      │←── SYN-ACK ──│
+      │──── ACK ────→│
+      │  [connected] │
+    ```
+
+    **Why three steps?** Each side must confirm that the other can both *send* and *receive*. Two messages would only confirm one direction. Three messages confirm bidirectional communication.
+
+    **UDP as an alternative:** UDP has no handshake — it sends data immediately without establishing a connection. This makes UDP faster but unreliable (no delivery guarantee, no ordering). UDP is used for video streaming, online games, and DNS queries where speed matters more than reliability.
+  </Accordion>
+
+  <Accordion title="What is the TLS handshake and how does HTTPS encryption work?">
+    The TLS handshake establishes encrypted communication between the browser and server before any HTTPS data is exchanged. It follows the TCP handshake.
+
+    **1. Client Hello**
+
+    The browser sends the TLS versions it supports, its list of cipher suites (encryption algorithms), and a random value called **Client Random**.
+
+    **2. Server Hello + Certificate**
+
+    The server picks a cipher suite, sends its own **Server Random**, and sends its **digital certificate**. The certificate contains the server's public key and is signed by a trusted Certificate Authority (CA). The browser verifies the signature to confirm the server's identity.
+
+    **3. Key exchange**
+
+    The browser generates a **Pre-Master Secret**, encrypts it with the server's public key, and sends it. The server decrypts it using its private key.
+
+    **4. Session key derivation**
+
+    Both sides now have Client Random, Server Random, and Pre-Master Secret. They independently derive the same **symmetric session key** from these values. All subsequent data is encrypted with this shared key.
+
+    **5. Finished**
+
+    Both sides exchange "Finished" messages encrypted with the session key, confirming the handshake succeeded. HTTPS communication begins.
+
+    ```
+    Browser                       Server
+       │──── Client Hello ────────→│
+       │←─── Server Hello + Cert ──│
+       │──── Pre-Master (encrypted)→│
+       │     [both derive session key]
+       │──── Finished ────────────→│
+       │←─── Finished ─────────────│
+       │     [HTTPS data flows]    │
+    ```
+
+    <Note>
+      TLS 1.3 (the current version) optimizes this process — the key exchange happens in one round trip instead of two, significantly reducing connection latency.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are the OSI 7 layers?">
+    The OSI (Open Systems Interconnection) model is a conceptual framework that divides network communication into seven layers. Each layer provides services to the layer above it and relies on the layer below it.
+
+    | Layer | Name | Responsibility | Examples |
+    |---|---|---|---|
+    | 7 | Application | User-facing network services | HTTP, SMTP, FTP |
+    | 6 | Presentation | Data formatting, encryption, compression | TLS, MIME, ASCII |
+    | 5 | Session | Session setup, maintenance, teardown | RPC, NetBIOS |
+    | 4 | Transport | End-to-end delivery, error checking | TCP, UDP |
+    | 3 | Network | Routing packets between networks | IP, routers |
+    | 2 | Data Link | Node-to-node framing, error detection | Ethernet, switches, MAC |
+    | 1 | Physical | Bit transmission over physical media | Cables, antennas, hubs |
+
+    **Why it matters for interviews:** understanding which layer a protocol or concept belongs to helps explain how it works and what can go wrong. HTTPS operates at layers 4–7 (TCP at 4, TLS at 6, HTTP at 7). A DNS failure is a layer 7/application issue. A cable unplugged is layer 1.
+
+    **In practice**, TCP/IP networking uses a simplified 4-layer model (Application, Transport, Internet, Link), but interviewers often ask about OSI specifically.
+  </Accordion>
+
+  <Accordion title="What are the advantages and disadvantages of JWT for authentication?">
+    **JWT (JSON Web Token)** is a compact, self-contained token format used to transmit authentication claims between parties. A JWT consists of three base64url-encoded parts: a header, a payload (claims), and a signature.
+
+    ```
+    eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+    [    header    ].[      payload      ].[      signature      ]
+    ```
+
+    **Advantages:**
+
+    1. **Stateless.** The server does not store session data — the token itself contains all needed claims. This scales easily across multiple servers.
+    2. **Self-contained.** User ID, roles, and expiration are embedded in the token, avoiding extra database queries for authorization checks.
+    3. **Integrity-verified.** The signature allows the server to verify that the token has not been tampered with since it was issued.
+
+    **Disadvantages:**
+
+    1. **Cannot be revoked before expiry.** Once a JWT is issued, it remains valid until it expires. Forced logout or token invalidation requires extra infrastructure (e.g., a token blocklist).
+    2. **Payload is not encrypted by default.** The payload is base64-encoded (not encrypted), so anyone with the token can read its claims. Never put sensitive data in a JWT payload unless using JWE.
+    3. **Size overhead.** JWTs are larger than session IDs, increasing request size — especially when many claims are included.
+
+    <Tip>
+      Store JWTs in `HttpOnly` cookies rather than `localStorage` to prevent XSS attacks from reading the token. Use short access token expiry (15 minutes) paired with a longer-lived refresh token.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is XSS and how do you prevent it?">
+    **XSS (Cross-Site Scripting)** is an attack where an adversary injects malicious JavaScript into a page viewed by other users. When the script executes, it runs in the victim's browser with full access to the page — including cookies, session tokens, and DOM content.
+
+    **Three XSS types:**
+
+    - **Stored XSS:** the malicious script is saved to the database (e.g., in a comment or profile field) and served to every user who views that page.
+    - **Reflected XSS:** the script is embedded in a URL parameter; the server echoes it back in the response without sanitization.
+    - **DOM-based XSS:** client-side JavaScript reads attacker-controlled data (URL hash, `postMessage`) and writes it to the DOM unsafely.
+
+    **Prevention:**
+
+    ```javascript
+    // ❌ Vulnerable: directly sets HTML from user input
+    element.innerHTML = userInput;
+
+    // ✅ Safe: textContent auto-escapes HTML special characters
+    element.textContent = userInput;
+
+    // ✅ When HTML rendering is required: sanitize first
+    import DOMPurify from 'dompurify';
+    element.innerHTML = DOMPurify.sanitize(userInput);
+    ```
+
+    **Content Security Policy (CSP):** restrict which scripts the browser is allowed to execute:
+
+    ```html
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' https://trusted-cdn.com;">
+    ```
+
+    **HttpOnly cookies:** prevent JavaScript from accessing session tokens even if XSS is present:
+
+    ```http
+    Set-Cookie: session=abc123; HttpOnly; Secure; SameSite=Strict
+    ```
+
+    <Warning>
+      Never trust user-supplied data. Validate on the server, escape on output, and apply CSP as a defense-in-depth measure.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are authentication and authorization, and how do they differ?">
+    **Authentication** answers: *"Who are you?"* It is the process of verifying a user's identity.
+
+    **Authorization** answers: *"What are you allowed to do?"* It is the process of determining whether an authenticated user has permission to access a resource or perform an action.
+
+    Authentication always precedes authorization — you cannot grant permissions to someone whose identity you have not verified.
+
+    ```
+    Login (authentication) → "You are Alice"
+          ↓
+    Access /admin (authorization) → "Alice has the admin role? Yes → allow"
+    ```
+
+    **Common authorization models:**
+
+    | Model | How it works | Example |
+    |---|---|---|
+    | RBAC (Role-Based) | Permissions tied to roles | Admin, Editor, Viewer |
+    | ABAC (Attribute-Based) | Permissions based on attributes of user, resource, and environment | "Allow if user.department == resource.department" |
+    | ReBAC (Relationship-Based) | Permissions based on graph relationships | "Allow if user owns the document" |
+
+    A typical web app uses RBAC for simplicity. More complex systems (Google Drive-style sharing) need ReBAC to express ownership and delegation relationships.
+  </Accordion>
+
+  <Accordion title="What is a CDN and when should you use one?">
+    A **CDN (Content Delivery Network)** is a globally distributed network of servers (called **edge servers**) that cache and deliver content from locations physically close to users. Rather than all requests traveling to a single origin server, a CDN routes each request to the nearest edge server.
+
+    **How it works:**
+
+    1. The CDN operator places edge servers in dozens or hundreds of locations worldwide.
+    2. On first request, the edge server fetches the resource from the origin and caches it locally.
+    3. Subsequent requests for that resource are served from the edge cache — no round trip to the origin.
+
+    **Benefits:**
+
+    - **Lower latency.** A user in São Paulo hitting a Brazilian edge server gets the resource faster than hitting a server in Seoul.
+    - **Traffic distribution.** Traffic spikes are absorbed across many edge nodes instead of hitting a single server.
+    - **Fault tolerance.** If one edge server fails, traffic routes to another.
+
+    **When to use a CDN:**
+
+    1. **Global audience.** If users are geographically distributed, a CDN dramatically reduces latency for non-local users.
+    2. **High traffic volume.** CDNs offload origin server bandwidth, reducing infrastructure cost and improving resilience to traffic spikes.
+
+    <Tip>
+      CDNs are most effective for static assets (JS, CSS, images, fonts) and large media files. Dynamic API responses are typically not cached on CDNs unless explicitly configured with appropriate `Cache-Control` headers.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is HTTP/2 and how does it improve on HTTP/1.1?">
+    HTTP/2 is a major revision of the HTTP protocol designed to address the performance bottlenecks of HTTP/1.1.
+
+    **Multiplexing** — the most important change. HTTP/1.1 processes requests sequentially on a single TCP connection (or opens multiple connections at a cost). HTTP/2 introduces **streams**: multiple requests and responses travel concurrently over a single connection, fully independent of each other.
+
+    ```
+    HTTP/1.1:  Req1 → Res1 → Req2 → Res2 → Req3 → Res3  (sequential)
+    HTTP/2:    Req1 ┐
+               Req2 ├──→ server ──→ Res1, Res2, Res3 in any order
+               Req3 ┘
+    ```
+
+    **Header compression (HPACK).** HTTP/1.1 sends full headers with every request, including the same `Host`, `User-Agent`, and `Accept` headers repeated on every call. HTTP/2 uses HPACK compression to send only changed headers after the first request, significantly reducing overhead.
+
+    **Server push.** The server can proactively send resources the client has not requested yet but will likely need. For example, when serving `index.html`, the server can push `main.css` and `app.js` without waiting for the client to parse the HTML and request them.
+
+    **HTTP/1.1 Pipelining vs HTTP/2 Multiplexing:**
+
+    HTTP/1.1 introduced pipelining to allow multiple requests on one connection, but responses still had to be returned in order — causing **Head-of-Line (HOL) blocking**: a slow response blocks all later responses. HTTP/2's multiplexing eliminates HOL blocking at the HTTP layer because responses can arrive in any order.
+
+    <Note>
+      HTTP/3 (based on QUIC) takes this further by eliminating HOL blocking at the transport layer too, using UDP instead of TCP.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What security considerations apply when using the anchor tag for external links?">
+    When linking to external sites with `target="_blank"`, you must set `rel` attributes to prevent information leakage and protect users from certain attacks.
+
+    **`rel="noopener"`** — prevents the opened page from accessing `window.opener`, which would let it manipulate the originating page. Without this, the external site could redirect the original tab to a phishing page while the user is away — a technique called **tabnabbing**.
+
+    **`rel="noreferrer"`** — suppresses the `Referer` header, preventing the destination from knowing which page the user came from. This protects URL-embedded session data or user identifiers. Note: `noreferrer` also implies `noopener`.
+
+    **`rel="nofollow"`** — instructs search engines not to follow the link when crawling. Use it for user-generated content, advertisement links, or any unverified external URL to prevent SEO link juice from flowing to unknown destinations.
+
+    ```html
+    <!-- Recommended for user-generated or unverified external links -->
+    <a href="https://external.com" target="_blank" rel="noopener noreferrer nofollow">
+      Visit site
+    </a>
+
+    <!-- For trusted partners: noopener + noreferrer for security, skip nofollow -->
+    <a href="https://partner.com" target="_blank" rel="noopener noreferrer">
+      Partner site
+    </a>
+    ```
+
+    <Warning>
+      Modern browsers apply `noopener` by default when `target="_blank"` is used, but explicitly setting `rel="noopener noreferrer"` remains a best practice for clarity and backward compatibility with older browsers.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

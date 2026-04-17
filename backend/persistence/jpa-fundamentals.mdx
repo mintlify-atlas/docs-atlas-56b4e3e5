@@ -1,0 +1,310 @@
+---
+title: 'JPA fundamentals: concepts and entity lifecycle'
+description: 'Core JPA concepts from the Maeil Mail interview archive: why JPA, how it relates to Hibernate and Spring Data JPA, entity states, ID generation, and more.'
+---
+
+JPA (Java Persistence API) is the standard specification that defines how Java applications interact with relational databases using objects. Rather than writing raw SQL everywhere, you map Java classes to database tables and let the persistence provider handle the translation. Understanding the layers — JPA the specification, Hibernate the implementation, and Spring Data JPA the convenience layer — is one of the most common foundation questions in Korean backend interviews.
+
+<AccordionGroup>
+  <Accordion title="Why use JPA? What problems does it solve?">
+    Implementing a data access layer by hand requires a large amount of boilerplate. Even the simplest query needs connection management, statement creation, result-set mapping, and exception handling. Once you add pagination, auditing, and soft-delete logic, the code quickly becomes difficult to maintain.
+
+    JPA addresses this by providing a standard object-relational mapping model. Spring Data JPA builds on top of JPA to make the situation even more productive:
+
+    - **No DAO implementation required.** Extend a `Repository` interface and you get standard CRUD methods for free.
+    - **Query derivation from method names.** Define `findByEmailAndStatus(String email, Status status)` in an interface and Spring Data JPA generates the query automatically.
+    - **Custom queries with `@Query`.** When method names are too complex, annotate the method with a JPQL or native SQL query.
+    - **Built-in transaction management.** Repository methods are wrapped in read-only transactions by default, and you can override this for write operations.
+    - **Pagination and auditing support.** `Pageable`, `@CreatedDate`, and `@LastModifiedDate` are handled with minimal configuration.
+
+    <Note>
+      JPA does not eliminate SQL knowledge. Understanding what queries are generated — and when — is essential for avoiding N+1 problems and writing performant applications.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between JPA, Hibernate, and Spring Data JPA?">
+    These three are related but operate at different levels of abstraction.
+
+    **JPA** is a specification — a set of interfaces and rules defined in the `javax.persistence` (or `jakarta.persistence`) package. It defines how entities are mapped, how the `EntityManager` works, and how queries are written in JPQL. JPA itself ships no runnable code.
+
+    **Hibernate** is one implementation of the JPA specification. It provides the actual classes that implement `EntityManager`, handle dirty checking, manage the first-level cache, and translate JPQL into SQL for a specific database dialect. You can swap Hibernate for another JPA provider (EclipseLink, DataNucleus) without changing your JPA-compliant code.
+
+    **Spring Data JPA** adds a higher-level abstraction on top of JPA. It provides the `Repository` interface hierarchy (`CrudRepository`, `JpaRepository`, etc.) and the query-derivation mechanism. When you call a method like `findAll()`, the underlying implementation — `SimpleJpaRepository` — delegates to an `EntityManager` internally:
+
+    ```java SimpleJpaRepository.java (simplified)
+    public class SimpleJpaRepository<T, ID> implements JpaRepository<T, ID> {
+
+        private final EntityManager em;
+
+        // Spring Data JPA is an abstraction over JPA (EntityManager),
+        // which in turn is implemented by Hibernate.
+        public List<T> findAll() {
+            return em.createQuery("select e from " + entityName + " e", domainClass)
+                     .getResultList();
+        }
+    }
+    ```
+
+    The layering is: **Spring Data JPA → JPA (EntityManager API) → Hibernate → Database**.
+
+    <Tip>
+      For interviews, describe it as three layers: JPA is the contract, Hibernate is the engine, and Spring Data JPA is the convenience wrapper that removes boilerplate.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the EntityManager and what does it do?">
+    The `EntityManager` is the central API for interacting with the persistence context. To understand what it does, you first need to understand the persistence context — the in-memory environment that tracks managed entities, defers writes (write-behind), and detects changes automatically (dirty checking).
+
+    The `EntityManager` gives you the methods to move entities through four lifecycle states:
+
+    | State | Description |
+    | --- | --- |
+    | **Transient (비영속)** | The object exists in memory but has no connection to the persistence context or the database. |
+    | **Managed (영속)** | The object is tracked by the persistence context. Changes are automatically flushed to the database on transaction commit. |
+    | **Detached (준영속)** | The object was once managed but is no longer tracked. Changes will not be persisted. |
+    | **Removed (삭제)** | The object is scheduled for deletion from the database. |
+
+    ```java EntityManager lifecycle example
+    // Transient — not associated with persistence context
+    Member member = new Member("Sancho");
+
+    // Managed — now tracked; INSERT will occur on flush
+    em.persist(member);
+
+    // Detached — changes to member are no longer tracked
+    em.detach(member);
+    em.clear(); // detaches all entities
+    em.close(); // closes the context, detaching everything
+
+    // Removed — DELETE will occur on flush
+    em.remove(member);
+    ```
+
+    The `EntityManager` also:
+    - Serves entities from the **first-level cache** (`find()` checks there first)
+    - Executes **JPQL and native queries** directly against the database
+    - **Flushes** the write-behind store to synchronize with the database
+
+    <Note>
+      In Spring applications, you rarely interact with `EntityManager` directly. Spring Data JPA's `SimpleJpaRepository` wraps it, and `@Transactional` manages the transaction boundaries that determine when the context is created and closed.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does JPA detect whether an entity is new or existing?">
+    When you call `repository.save(entity)`, `SimpleJpaRepository` must decide whether to call `em.persist()` (INSERT) or `em.merge()` (SELECT then UPDATE). This decision is made by `JpaEntityInformation.isNew(entity)`.
+
+    The default logic depends on what annotations are present:
+
+    **If `@Version` is used and the field is a wrapper type** (e.g., `Long` rather than `long`): the entity is considered new if the version field is `null`.
+
+    **Otherwise**, `AbstractEntityInformation.isNew()` checks the `@Id` field:
+
+    ```java AbstractEntityInformation.isNew() (simplified)
+    public boolean isNew(T entity) {
+        Id id = getId(entity);
+        Class<ID> idType = getIdType();
+
+        if (!idType.isPrimitive()) {
+            return id == null;  // null ID → new entity
+        }
+
+        if (id instanceof Number) {
+            return ((Number) id).longValue() == 0L;  // 0 → new entity
+        }
+
+        throw new IllegalArgumentException("Unsupported primitive id type " + idType);
+    }
+    ```
+
+    When `@GeneratedValue` is used, the ID is assigned by the database at INSERT time, so objects in memory before saving have a `null` or `0` ID — correctly identified as new.
+
+    **The problem with manually assigned IDs:** if you assign the ID yourself (no `@GeneratedValue`), the entity already has a non-null ID before saving. `isNew()` returns `false`, so `merge()` is called instead of `persist()`. This triggers an unnecessary SELECT before the INSERT, even for a brand-new record.
+
+    **The fix:** implement `Persistable<ID>` so that the custom `isNew()` logic is used:
+
+    ```java Entity implementing Persistable
+    @Entity
+    public class Article implements Persistable<String> {
+
+        @Id
+        private String id;
+
+        @Transient
+        private boolean isNew = true;
+
+        @Override
+        public String getId() { return id; }
+
+        @Override
+        public boolean isNew() { return isNew; }
+
+        @PostPersist
+        @PostLoad
+        void markNotNew() { this.isNew = false; }
+    }
+    ```
+
+    <Warning>
+      Assigning IDs manually without implementing `Persistable` will cause a SELECT for every `save()` call on new entities, which can be a significant performance problem under load.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the ddl-auto options and which should you use in production?">
+    The `spring.jpa.hibernate.ddl-auto` property controls what Hibernate does to the database schema on startup. There are five options:
+
+    | Option | Behavior | Typical environment |
+    | --- | --- | --- |
+    | `none` | No schema changes. Everything is managed manually. | Production |
+    | `validate` | Validates that entity mappings match the schema. Fails fast if they don't. Does not modify the schema. | Production (safe check) |
+    | `update` | Applies additive schema changes (new tables, new columns). Does not drop columns. | Development (with caution) |
+    | `create` | Drops and recreates the schema on every startup. All data is lost. | Development / early iteration |
+    | `create-drop` | Same as `create`, but also drops the schema when the application shuts down. | Tests |
+
+    ```yaml application.yml example
+    spring:
+      jpa:
+        hibernate:
+          ddl-auto: validate  # safe for production
+    ```
+
+    <Warning>
+      Never use `create` or `create-drop` in production. `update` is also risky because it cannot safely handle column renames or type changes, and schema modifications on a live database without a rollback plan can cause data loss.
+    </Warning>
+
+    **Schema management in production:** use a dedicated migration tool such as [Flyway](https://flywaydb.org) or [Liquibase](https://www.liquibase.org). These tools version-control your schema changes and apply them in a controlled, repeatable way. For changes that require downtime, schedule them during low-traffic windows and always have a rollback script ready.
+  </Accordion>
+
+  <Accordion title="What ID generation strategies does JPA provide?">
+    JPA provides two ways to assign primary keys: **manual assignment** (just `@Id`) and **automatic generation** (`@Id` + `@GeneratedValue`). For automatic generation, the `strategy` attribute of `@GeneratedValue` selects one of four strategies from the `GenerationType` enum:
+
+    ```java GenerationType enum
+    public enum GenerationType {
+        AUTO,
+        IDENTITY,
+        SEQUENCE,
+        TABLE
+    }
+    ```
+
+    **IDENTITY** delegates key generation to the database (MySQL `AUTO_INCREMENT`, PostgreSQL `SERIAL`). The ID is assigned only after the row is inserted, so JPA must issue the INSERT immediately when `persist()` is called — the write-behind optimization does not apply. Hibernate uses `Statement.getGeneratedKeys()` to retrieve the new ID without an extra SELECT. Batch inserts are not possible with this strategy.
+
+    **SEQUENCE** uses a database sequence object (supported by PostgreSQL, Oracle, H2). When `persist()` is called, JPA first fetches the next value from the sequence, assigns it to the entity, adds the entity to the persistence context, and defers the actual INSERT until flush. This preserves write-behind and supports batch inserts.
+
+    ```java Sequence strategy example
+    @Entity
+    public class Order {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "order_seq")
+        @SequenceGenerator(name = "order_seq", sequenceName = "order_sequence", allocationSize = 50)
+        private Long id;
+    }
+    ```
+
+    **TABLE** emulates sequences using a dedicated key-generation table. It works with all databases but requires an extra SELECT + UPDATE per entity creation, making it slower than SEQUENCE.
+
+    **AUTO** lets Hibernate choose the strategy based on the database dialect. The choice may change when you switch databases, so prefer explicit strategies in production code.
+
+    <Tip>
+      Use `SEQUENCE` with a generous `allocationSize` (e.g., 50) when high INSERT throughput matters. This batches sequence calls, reducing round-trips to the database.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Why should you use Java Record as a DTO?">
+    A DTO (Data Transfer Object) carries data between layers without business logic. Before Java 16, writing one required a lot of boilerplate:
+
+    ```java Traditional DTO class
+    public class MemberDto {
+
+        private final String name;
+        private final String email;
+        private final int age;
+
+        public MemberDto(String name, String email, int age) {
+            this.name = name;
+            this.email = email;
+            this.age = age;
+        }
+
+        public String getName()  { return name; }
+        public String getEmail() { return email; }
+        public int getAge()      { return age; }
+        // equals(), hashCode(), toString() also needed
+    }
+    ```
+
+    A `record` eliminates all of that:
+
+    ```java Record DTO
+    // Constructor, accessors, equals(), hashCode(), toString() — all generated
+    public record MemberDto(String name, String email, int age) {}
+    ```
+
+    Records are immutable by default (all fields are `final`), thread-safe to share across layers, and structurally equal by value — making them a natural fit for DTOs.
+
+    **Records are not always DTOs.** A record can also be a value object:
+
+    ```java Record as a value object
+    public record Coordinates(double x, double y) {}
+    ```
+
+    The distinction matters: a DTO's purpose is transferring data between layers; a value object's purpose is representing a domain concept. Both can be implemented with records, but their intent and usage differ.
+
+    **Limitations of records:**
+    - Cannot extend another class (`extends` is not allowed)
+    - All fields are `final` — no mutable state
+    - Not designed to carry business logic
+    - Requires Java 16 or later (preview in 14 and 15)
+
+    <Note>
+      Records work well as projection DTOs in Spring Data JPA queries via interface-based or class-based projections, and as response bodies in REST controllers.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Why does @OneToOne lazy loading not work on the non-owning side?">
+    In a bidirectional `@OneToOne` mapping, lazy loading fails silently on the side that does **not** own the foreign key.
+
+    Consider this mapping:
+
+    ```java Bidirectional OneToOne
+    @Entity(name = "users")
+    public class User {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        // Non-owning side — no FK column here
+        @OneToOne(mappedBy = "user", fetch = FetchType.LAZY)
+        private Account account;
+    }
+
+    @Entity
+    public class Account {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        // Owning side — FK column lives here
+        @OneToOne(fetch = FetchType.LAZY)
+        private User user;
+    }
+    ```
+
+    When you load a `User`, JPA must decide whether to set `account` to `null` or to a proxy object. On the owning side (`Account`), the FK column is right there — JPA can check whether it is null and decide immediately. On the non-owning side (`User`), there is no FK column in the `users` table, so JPA has no local information to make that decision.
+
+    To avoid returning a proxy for a potentially non-existent association, JPA issues an extra query to check whether the `Account` row exists. That extra query defeats the purpose of lazy loading.
+
+    This is a fundamental limitation of the JPA specification, not a Hibernate bug.
+
+    **Workarounds:**
+    - Make the relationship unidirectional (from `Account` to `User` only). The owning side always supports lazy loading correctly.
+    - Reconsider whether lazy loading is actually necessary. If `User` and `Account` are almost always loaded together, eager loading with a single JOIN query may be more efficient.
+    - Use `@LazyToOne(LazyToOneOption.NO_PROXY)` with Hibernate bytecode enhancement, which avoids the extra query by using subclassing at the bytecode level.
+
+    <Warning>
+      If you load many `User` entities and iterate over their `account` fields, each iteration will trigger an extra SELECT even with `LAZY` specified, causing an N+1 pattern that is hard to spot in code review.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

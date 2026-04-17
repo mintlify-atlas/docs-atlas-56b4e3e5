@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Maeil Mail Interview Archive",
+  "projectType": "general",
+  "projectName": "Maeil Mail Interview Archive",
+  "projectDescription": "A curated archive of technical interview questions and detailed answers for frontend (JavaScript, React, Next.js, CSS, networking) and backend (Spring, JPA, databases, OS, Java) engineers, originally delivered as a daily email subscription service.",
   "theme": "palm",
-  "colors": {
-    "primary": "#4F7CFF",
-    "light": "#EEF2FF",
-    "dark": "#1E2D6B"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/maeil-mail/maeil-mail-contents"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/maeil-mail/maeil-mail-contents"
-    }
-  },
+  "primaryColor": "#4F7CFF",
+  "lightColor": "#EEF2FF",
+  "darkColor": "#1E2D6B",
   "navigation": {
     "tabs": [
       {
@@ -143,5 +131,18 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "150+ frontend interview Q&A covering JavaScript, React, Next.js, CSS, browser APIs, TypeScript, and networking",
+    "152+ backend interview Q&A covering Spring, JPA, databases, Java, OS, distributed systems, and design patterns",
+    "Questions categorized by topic for targeted study",
+    "Detailed answers with code examples, diagrams, and additional learning resources",
+    "Covers both conceptual understanding and practical application for mid-to-senior engineers"
+  ],
+  "publicApiSurface": [
+    "Frontend Q&A: fe-1 through fe-150 (closures, event loop, React hooks, Next.js, CSS, networking)",
+    "Backend Q&A: be-1 through be-152 (Spring MVC, JPA, transactions, OS, Java, distributed systems)",
+    "Category-based TOCs for frontend (7 categories) and backend (8 categories)",
+    "Sequential TOCs by question ID for both frontend and backend tracks"
+  ]
 }

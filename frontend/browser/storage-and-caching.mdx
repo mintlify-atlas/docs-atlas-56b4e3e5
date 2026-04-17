@@ -1,0 +1,202 @@
+---
+title: "Browser Storage and Caching Interview Questions"
+description: "Interview Q&A on localStorage, sessionStorage, cookies, Cache-Control, ETag, stale-while-revalidate, memory vs disk cache, and WebView."
+---
+
+Effective use of browser storage and HTTP caching is a mark of an experienced frontend engineer. Interview questions in this area range from the basics of `localStorage` vs `sessionStorage` to the nuances of HTTP cache headers like `Cache-Control`, `ETag`, and `stale-while-revalidate`. This page covers the most interview-relevant topics with practical examples.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between localStorage and sessionStorage?">
+    Both are Web Storage APIs that store key-value pairs of strings in the browser. The difference is in **persistence** and **scope**.
+
+    **`localStorage`** persists data indefinitely. Data survives browser restarts, device reboots, and tab closures. It is shared across all tabs and windows that share the same origin.
+
+    ```javascript
+    // Data remains until explicitly cleared
+    localStorage.setItem('theme', 'dark');
+    localStorage.getItem('theme'); // 'dark' — even after reopening the browser
+    ```
+
+    **`sessionStorage`** exists only for the lifetime of the current browser tab or window. Closing the tab destroys the data. Tabs do not share `sessionStorage` with each other, even within the same origin.
+
+    ```javascript
+    // Data is gone when the tab closes
+    sessionStorage.setItem('draftForm', JSON.stringify(formData));
+    ```
+
+    | | `localStorage` | `sessionStorage` |
+    |---|---|---|
+    | Persistence | Permanent (until cleared) | Tab session only |
+    | Shared across tabs | Yes | No |
+    | Good for | Theme settings, cart data | Temporary form state |
+
+    **Security considerations:** neither storage mechanism encrypts data. JavaScript running on the page has full access to both stores, making them vulnerable to XSS attacks. Never store sensitive data like authentication tokens in either. For auth, use `HttpOnly` cookies, which are inaccessible to JavaScript.
+  </Accordion>
+
+  <Accordion title="What are cookies and sessions, and how do they differ?">
+    Both cookies and sessions are mechanisms for maintaining state across HTTP requests. HTTP is stateless by design — each request is independent — so some mechanism is needed to track authenticated users, preferences, and shopping carts.
+
+    **Cookies** are small pieces of data stored *in the browser*. The server sets them via the `Set-Cookie` response header. After that, the browser automatically includes the cookie in every subsequent request to the same origin.
+
+    ```http
+    Set-Cookie: sessionId=abc123; HttpOnly; Secure; SameSite=Strict
+    ```
+
+    Cookies can have an expiration date, making them suitable for persistent login ("remember me"). Because they are client-side, the server needs no extra storage — but if stolen, the cookie data is exposed.
+
+    **Sessions** store data *on the server*. When a user authenticates, the server creates a session object and sends back only a session ID (typically in a cookie). On subsequent requests, the browser sends the session ID, and the server looks up the full session data.
+
+    | | Cookies | Sessions |
+    |---|---|---|
+    | Data lives in | Browser | Server |
+    | Security | Less secure (client-exposed) | More secure (data server-side) |
+    | Scalability | High (no server storage) | Lower (requires session sync in distributed systems) |
+    | Force logout | Hard (can't invalidate client cookie) | Easy (delete server session) |
+
+    **When to use sessions:** high-security applications, features requiring forced logout or concurrent login limits, or when controlling exactly which sessions are active.
+
+    <Tip>
+      For most modern applications, JWTs in `HttpOnly` cookies combine the statelessness of tokens with cookie security benefits, offering a middle ground between pure cookies and server sessions.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is Cache-Control and how should you set it for different resources?">
+    `Cache-Control` is an HTTP response header that tells browsers and intermediate caches (proxies, CDNs) how to cache a resource — and for how long.
+
+    The key insight is that different resources should have different caching strategies based on how often they change.
+
+    **Long-lived static assets** (JavaScript bundles, CSS files, images with content-hashed filenames):
+
+    ```http
+    Cache-Control: public, max-age=31536000, immutable
+    ```
+
+    `max-age=31536000` caches for one year. `immutable` tells the browser not to revalidate even on forced refresh, because the file's URL changes when its content changes (content hashing).
+
+    **HTML documents** (the entry point — must always reflect latest content):
+
+    ```http
+    Cache-Control: no-cache, must-revalidate
+    ```
+
+    `no-cache` does not mean "never cache" — it means "always revalidate before using". The browser stores the response but sends a conditional request to the server before using it. If the server confirms nothing changed, the browser uses its cached copy without re-downloading.
+
+    **Private sensitive data** (user-specific API responses):
+
+    ```http
+    Cache-Control: private, no-store
+    ```
+
+    `private` prevents CDNs from caching the response. `no-store` prevents the browser from storing it at all.
+
+    <Warning>
+      Misconfigured `Cache-Control` can serve stale content to users for days or invalidate the cache too aggressively, increasing server load and slowing the site.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is an ETag and how does it enable conditional requests?">
+    An `ETag` (Entity Tag) is an HTTP response header that contains a unique identifier representing a specific version of a resource. It is typically a hash of the resource content or a version number.
+
+    ```http
+    HTTP/1.1 200 OK
+    ETag: "abc123"
+    Cache-Control: no-cache
+    ```
+
+    On subsequent requests, the client includes the ETag value in the `If-None-Match` header:
+
+    ```http
+    GET /api/products HTTP/1.1
+    If-None-Match: "abc123"
+    ```
+
+    If the resource has not changed, the server responds with `304 Not Modified` and no body — saving bandwidth. If it has changed, the server responds with `200 OK` and the new content plus a new ETag.
+
+    **ETag vs `Last-Modified`:** `Last-Modified` uses a timestamp for comparison, which has one-second granularity. `ETag` is content-based and handles sub-second changes correctly.
+
+    **Combining `ETag` with `Cache-Control`:**
+
+    ```http
+    # Static assets: cache for 1 year, use ETag for revalidation after deployment
+    Cache-Control: max-age=31536000
+    ETag: "abc123"
+
+    # Dynamic API: always revalidate, but use ETag to skip re-download if unchanged
+    Cache-Control: no-cache
+    ETag: "xyz789"
+    ```
+
+    **Strong vs Weak ETags:**
+    - `"abc123"` — strong ETag: byte-for-byte identical
+    - `W/"abc123"` — weak ETag: semantically equivalent (minor differences tolerated)
+  </Accordion>
+
+  <Accordion title="What is stale-while-revalidate and when should you use it?">
+    `stale-while-revalidate` is a `Cache-Control` directive that implements a two-phase caching strategy: serve stale content immediately while fetching fresh content in the background.
+
+    ```http
+    Cache-Control: max-age=60, stale-while-revalidate=30
+    ```
+
+    This directive means:
+    - For the first **60 seconds**: serve from cache directly (fresh).
+    - For the next **30 seconds** (60–90s): the cache is expired, but serve the stale response immediately *and* trigger a background fetch to refresh the cache.
+    - After **90 seconds**: the stale window has passed; wait for a fresh response.
+
+    ```
+    0s ─────────── 60s ─────────── 90s ────────────
+    [  fresh cache  ][  stale+revalidate  ][ must revalidate ]
+    ```
+
+    The user never sees a loading state during the stale window — they get instant responses while the cache silently updates.
+
+    **Good use cases:** news feeds, product listings, user profile data, dashboard aggregates — content that can tolerate being a few seconds or minutes behind.
+
+    **Poor use cases:** stock prices, real-time inventory, booking availability, payment data — anything where showing outdated data causes real harm.
+
+    <Note>
+      This pattern is also the inspiration behind the `stale-while-revalidate` strategy in client-side data-fetching libraries like SWR and React Query, which apply the same concept to in-memory data fetching.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between memory cache and disk cache?">
+    Browsers maintain two distinct cache stores, each with different speed and persistence characteristics.
+
+    **Memory cache** stores resources in RAM. It provides near-instant access because there is no I/O involved. The memory cache is ideal for resources used repeatedly within the current page session (CSS, JavaScript, small images). However, it is volatile — the cache is cleared when the tab is closed or the page is refreshed.
+
+    **Disk cache** stores resources on the local storage device (HDD or SSD). It persists across sessions: closing and reopening the browser does not clear it. This makes disk cache ideal for resources that are expensive to re-download (images, fonts, large scripts) and are reused across multiple visits.
+
+    | | Memory cache | Disk cache |
+    |---|---|---|
+    | Storage medium | RAM | HDD / SSD |
+    | Access speed | Very fast | Slower (I/O) |
+    | Persistence | Gone on tab close / refresh | Survives browser restarts |
+    | Typical contents | CSS, JS in active use | Images, fonts, large assets |
+
+    The browser decides which cache to use based on heuristics: resources likely to be re-accessed in the current session go to memory; resources with longer cache lifetimes or larger sizes go to disk. Exact behavior varies by browser.
+  </Accordion>
+
+  <Accordion title="What is a WebView and what are its trade-offs compared to native?">
+    A WebView is a browser engine embedded inside a native mobile application. It renders HTML, CSS, and JavaScript as if in a browser, but within the app's UI. On Android it is `WebView`; on iOS it is `WKWebView`.
+
+    **Advantages:**
+
+    - **Code sharing.** A single web codebase renders on both iOS and Android via their respective WebViews — reducing duplicated effort.
+    - **Rapid updates.** Web content inside a WebView can be updated without going through the App Store or Play Store review process.
+    - **Web skills reuse.** Teams already building for the web can deliver mobile features without learning native SDKs.
+
+    **Disadvantages:**
+
+    - **Performance.** WebViews cannot match native rendering for complex animations or high-computation UIs.
+    - **Limited hardware access.** Native APIs for GPS, camera, Bluetooth, and file system require bridge code and are not always equivalent to direct native access.
+    - **Security.** Loading external URLs in a WebView can expose users to phishing and malicious scripts. All user input must be sanitized carefully.
+
+    **WebView vs PWA:**
+
+    A Progressive Web App (PWA) delivers app-like experiences using web standards — offline support via Service Workers, installability, push notifications — without requiring a native wrapper. A WebView is *embedded inside* a native app, while a PWA is a standalone web app that can be installed directly from the browser.
+
+    <Tip>
+      WebViews are well-suited to features that need frequent updates or already exist as web pages. Use native code for performance-critical features like real-time video or complex animations.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

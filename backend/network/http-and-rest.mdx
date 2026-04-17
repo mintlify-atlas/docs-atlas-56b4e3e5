@@ -1,0 +1,279 @@
+---
+title: "HTTP, REST, and Core Web Protocols Explained"
+description: "Interview Q&A covering TCP handshakes, HTTP versions, REST, CORS, DNS, CDN, timeouts, SSR vs CSR, and more — drawn from the Maeil Mail archive."
+---
+
+Understanding how the web actually works beneath the surface is one of the most frequently tested areas in backend interviews. This page compiles Q&A from the Maeil Mail archive covering the full lifecycle of a web request — from how a URL resolves through DNS, to how data travels over TCP, to how HTTP/2 multiplexing improves on the protocol's earlier limitations.
+
+<AccordionGroup>
+
+  <Accordion title="What is the TCP 3-way handshake and why does it matter?">
+    Before any data is exchanged over TCP, the client and server must agree on connection parameters through a three-step exchange.
+
+    1. **SYN** — The client sends a segment containing an initial sequence number and window size, requesting a connection.
+    2. **SYN-ACK** — The server accepts and replies with its own sequence number plus an acknowledgment of the client's sequence number (`ACK = client_seq + 1`).
+    3. **ACK** — The client acknowledges the server's sequence number (`ACK = server_seq + 1`). The connection is now established and data transfer can begin.
+
+    The handshake ensures both sides have agreed on sequence numbers for reliable, ordered delivery. Skipping it would mean neither side could detect lost or out-of-order packets.
+
+    <Note>
+      When a TCP connection is closed, a separate **4-way handshake** (FIN / ACK / FIN / ACK) is used, because each direction of data flow must be closed independently.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What happens when you type www.google.com into a browser?">
+    This question traces the full request lifecycle across multiple OSI layers.
+
+    1. **DNS resolution (Application layer, Layer 7)** — The browser needs an IP address for `www.google.com`. It queries a DNS server, which returns an IP such as `142.250.190.78`.
+    2. **TCP 3-way handshake (Transport layer, Layer 4)** — With the IP address in hand, the browser establishes a TCP connection to port 80 (HTTP) or 443 (HTTPS).
+    3. **HTTP request** — The browser sends `GET / HTTP/1.1` through the TCP connection. The packet is routed using IP addresses (Layer 3) and MAC addresses (Layer 2).
+    4. **HTTP response** — The server processes the request and replies with a `200 OK` status code along with the HTML, CSS, and JavaScript for the page.
+    5. **Rendering** — The browser parses the response and renders the page.
+    6. **TCP teardown** — Once all data is transferred, a 4-way handshake closes the connection.
+
+    <Tip>
+      When HTTPS is used, a **TLS handshake** occurs between the TCP handshake and the first HTTP request, adding encryption negotiation to the flow.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is HTTP idempotency and why is it important?">
+    An operation is **idempotent** if applying it multiple times produces the same result as applying it once. In HTTP, a method is idempotent if sending the same request repeatedly leaves the server in the same state as sending it once.
+
+    | Method | Idempotent? | Safe? |
+    |--------|-------------|-------|
+    | GET    | Yes         | Yes   |
+    | HEAD   | Yes         | Yes   |
+    | PUT    | Yes         | No    |
+    | DELETE | Yes         | No    |
+    | POST   | No          | No    |
+    | PATCH  | No          | No    |
+
+    **Why it matters in practice:** When a network connection drops mid-request, the client needs to decide whether it is safe to retry. If the method is idempotent, retrying is safe because the server state will be unchanged. If it is not (e.g., a payment POST), the client must first check whether the original request succeeded before retrying to avoid duplicate charges.
+
+    <Warning>
+      Even if a method is formally idempotent, application-level side effects (such as audit logs or notifications) may still occur on each call. Idempotency only guarantees the **resource state** remains unchanged.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is CORS and how does it work?">
+    **CORS (Cross-Origin Resource Sharing)** is a browser mechanism that controls which cross-origin requests are permitted. An "origin" is the combination of protocol, domain, and port — so `http://example.com` and `https://example.com` are different origins.
+
+    CORS exists because browsers enforce the **Same-Origin Policy (SOP)** to prevent malicious sites from making authenticated requests on a user's behalf (CSRF attacks). CORS is a controlled relaxation of SOP.
+
+    **How the browser checks CORS:**
+    The browser compares the request's `Origin` header against the server's `Access-Control-Allow-Origin` response header. If the origin is not allowed, the browser blocks the response.
+
+    There are three request categories:
+
+    - **Simple Request** — Uses only `GET`, `POST`, or `HEAD` with standard headers and a safe `Content-Type` (e.g., `text/plain`, `multipart/form-data`). The browser sends the request directly and checks the response headers.
+    - **Preflight Request** — For any request that does not meet the Simple Request criteria, the browser first sends an `OPTIONS` request asking the server whether the real request is permitted. The server must reply with `Access-Control-Allow-Methods`, `Access-Control-Allow-Headers`, and optionally `Access-Control-Max-Age` (to cache the preflight result).
+    - **Credentialed Request** — When cookies or authorization tokens are included, the server must set `Access-Control-Allow-Credentials: true` and must **not** use a wildcard (`*`) in `Access-Control-Allow-Origin`.
+
+    <Note>
+      CORS is enforced by the **browser**, not the server. A server receives every request regardless; it is the browser that blocks the response from being exposed to JavaScript.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between Connection Timeout, Socket Timeout, and Read Timeout?">
+    All three are safety valves that prevent a client from waiting indefinitely, but they apply at different stages of the connection lifecycle.
+
+    **Connection Timeout**
+    The maximum time allowed for the TCP 3-way handshake to complete. If the server does not respond within this window — due to a crash, firewall drop, or heavy load — a Connection Timeout is raised. The connection was never established.
+
+    **Socket Timeout**
+    Once connected, the server sends data as a stream of packets. Socket Timeout is the maximum allowed gap between consecutive packets arriving. If a packet does not arrive within this interval, the client raises a Socket Timeout even though the connection is technically still open.
+
+    **Read Timeout**
+    The maximum time to wait for a complete I/O operation after the connection is open. If the server takes too long to produce a response — perhaps because of a slow database query — the client raises a Read Timeout and closes the connection.
+
+    **Why timeouts are necessary:** Without them, a single slow or unresponsive external service can exhaust thread pools and connection pools, eventually causing the entire application to grind to a halt.
+  </Accordion>
+
+  <Accordion title="What is the difference between SSR and CSR?">
+    **Server-Side Rendering (SSR)** generates the full HTML on the server, including all data, before sending it to the browser. The browser receives a ready-to-display document and only needs to download and attach JavaScript afterward.
+
+    - **Advantages:** Faster initial page load; better SEO because crawlers receive complete HTML.
+    - **Disadvantages:** Each page navigation may require a full round-trip to the server.
+
+    **Client-Side Rendering (CSR)** sends a minimal HTML skeleton to the browser, which then downloads a JavaScript bundle and uses it to build the DOM dynamically, fetching data from APIs as needed.
+
+    - **Advantages:** Once the bundle is loaded, navigation between pages is fast and does not require full server round-trips; lower server load.
+    - **Disadvantages:** Slower initial load (the browser must download and execute JavaScript before anything is visible); poor SEO by default because crawlers see an empty HTML body.
+
+    <Tip>
+      Modern frameworks like Next.js support **hybrid rendering**, letting you choose SSR, CSR, or static generation per route depending on SEO and performance requirements.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between a Web Server and a WAS?">
+    **Web Server** (e.g., Nginx, Apache) handles **static content** — HTML files, images, CSS, JavaScript — and serves it directly to clients. It can also forward dynamic requests upstream to a WAS.
+
+    **WAS (Web Application Server)** (e.g., Tomcat in the Java ecosystem) provides a **servlet container** and executes application logic to generate dynamic content. It handles database access, business rules, and session management.
+
+    **Why separate them?**
+    - **Resource isolation:** The WAS focuses on expensive application logic; the Web Server handles cheap static file serving.
+    - **Scalability:** You can scale Web Servers and WAS instances independently based on actual bottlenecks.
+    - **Additional concerns:** The Web Server can handle load balancing, caching, compression, and SSL/TLS termination, offloading that work from the WAS.
+
+    <Note>
+      A WAS technically *can* serve static files, but having it do so wastes resources that could otherwise serve dynamic requests.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is HTTPS and how does TLS work?">
+    **HTTP** transmits data as plaintext, which means any party on the network path can read or modify it. **HTTPS** wraps HTTP inside **TLS (Transport Layer Security)** to provide encryption, authentication, and integrity.
+
+    **Getting a certificate:**
+    To enable HTTPS, the server obtains a certificate from a trusted **Certificate Authority (CA)**. The CA signs the certificate with its private key, binding the server's identity to a public key. Browsers ship with the CA's public key pre-installed, allowing them to verify the certificate's authenticity.
+
+    **The TLS handshake (simplified):**
+    1. The client sends supported cipher suites, a protocol version, and a random value.
+    2. The server replies with its chosen cipher suite, its certificate, and its own random value.
+    3. The client verifies the certificate using the CA's public key.
+    4. The client generates a **Pre-Master Secret**, encrypts it with the server's public key, and sends it.
+    5. Both sides derive the same **Master Secret** and then a **session key** from the random values and Pre-Master Secret.
+    6. From this point, all data is encrypted symmetrically using the session key.
+
+    This two-phase approach (asymmetric for key exchange, symmetric for bulk data) combines the security of public-key cryptography with the speed of symmetric encryption.
+  </Accordion>
+
+  <Accordion title="What is REST and what are its trade-offs?">
+    **REST (Representational State Transfer)** is an architectural style for distributed systems built on top of HTTP. A RESTful API uses HTTP URIs to identify resources and HTTP methods to express operations:
+
+    | Method | CRUD operation | Idempotent? |
+    |--------|----------------|-------------|
+    | GET    | Read           | Yes         |
+    | POST   | Create         | No          |
+    | PUT    | Replace        | Yes         |
+    | PATCH  | Partial update | No          |
+    | DELETE | Delete         | Yes         |
+
+    Resources are typically represented in **JSON**, which is self-descriptive and backward-compatible — consumers ignore fields they do not recognise.
+
+    **Advantages:**
+    - Clear separation between client and server.
+    - Works on any platform that speaks HTTP.
+    - Easy to test with tools like `curl` or Postman.
+
+    **Disadvantages:**
+    - Only request/response communication (no push).
+    - Some actions do not map cleanly onto CRUD verbs (e.g., "approve an order").
+    - Fetching related resources often requires multiple round-trips (over-fetching or under-fetching).
+    - JSON is verbose compared to binary formats like Protocol Buffers, which increases payload size and parsing overhead.
+  </Accordion>
+
+  <Accordion title="What changed between HTTP/1.1 and HTTP/2?">
+    **HTTP/1.0** opened a new TCP connection for every request/response pair — expensive in both latency and CPU.
+
+    **HTTP/1.1** introduced:
+    - **Persistent connections** — a single TCP connection stays open for multiple requests (controlled by a timeout).
+    - **Pipelining** — the client can send multiple requests without waiting for each response; however, the server must respond in order, causing **Head-of-Line (HOL) blocking** when a slow response stalls all subsequent ones.
+    - **Repeated headers** — every request resends the full header set, wasting bandwidth.
+
+    **HTTP/2** addresses these with:
+    - **Binary framing** — messages are split into binary frames rather than text, enabling faster parsing and transmission.
+    - **Multiplexing** — multiple request/response streams share a single TCP connection and are processed in parallel, eliminating application-layer HOL blocking.
+    - **HPACK header compression** — a shared compression table avoids retransmitting identical headers across requests.
+
+    <Note>
+      HTTP/2 solves HOL blocking at the **application layer** but TCP-level HOL blocking remains. HTTP/3 (QUIC) addresses this by replacing TCP with UDP-based streams that do not share head-of-line dependencies.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between URI, URL, and URN?">
+    **URI (Uniform Resource Identifier)** is the umbrella term for any string that identifies a resource. Both URL and URN are subtypes of URI.
+
+    **URL (Uniform Resource Locator)** identifies a resource by its **location** and the protocol needed to access it.
+
+    ```
+    https://www.example.com/path/to/resource
+    └───┘   └─────────────┘└─────────────────┘
+    scheme       host             path
+    ```
+
+    **URN (Uniform Resource Name)** identifies a resource by a **persistent name** that does not encode location. Even if the resource moves, the URN stays the same.
+
+    ```
+    urn:isbn:0451450523   ← identifies a specific book by ISBN
+    ```
+
+    In everyday web development you nearly always work with URLs. URNs appear in contexts like digital libraries or standards documents where long-term, location-independent identification is required.
+  </Accordion>
+
+  <Accordion title="How does DNS resolve a domain name to an IP address?">
+    **DNS (Domain Name System)** is a hierarchical distributed database that maps human-readable domain names to IP addresses.
+
+    **The four server types involved:**
+    - **Local name server** — the first stop; typically your ISP's DNS or a public resolver like Google's `8.8.8.8`. Results are cached here.
+    - **Root name server** — knows the address of every TLD name server.
+    - **TLD name server** — manages a top-level domain such as `.com`, `.kr`, or `.net`.
+    - **Authoritative name server** — holds the actual DNS records for a specific domain (e.g., `maeil-mail.kr`).
+
+    **Example: resolving `api.maeil-mail.kr`**
+
+    1. Client asks the local name server for `api.maeil-mail.kr`.
+    2. Local name server has no cache entry, so it asks the root name server.
+    3. Root name server returns the address of the `.kr` TLD name server.
+    4. Local name server asks the `.kr` TLD name server.
+    5. TLD name server returns the address of the `maeil-mail.kr` authoritative name server.
+    6. Local name server asks the authoritative name server, which returns the IP address.
+    7. Local name server caches the result and returns it to the client.
+
+    <Tip>
+      DNS results are cached at every level with a **TTL (Time To Live)**. Lowering TTL before a planned IP migration lets the change propagate quickly; keeping TTL high reduces resolver load during normal operation.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is a CDN and when should you use one?">
+    A **CDN (Content Delivery Network)** is a geographically distributed network of servers (edge nodes) that cache content close to end users, reducing latency and offloading traffic from the origin server. Popular providers include CloudFront and Cloudflare.
+
+    **Push vs Pull:**
+    - **Push** — the origin server proactively pushes content to edge nodes. Predictable and timely, but requires active management of updates.
+    - **Pull** — edge nodes fetch content from the origin on the first cache miss, then serve it from cache for subsequent requests. Simpler to manage, but the first request to each edge node is slower.
+
+    **Considerations before adopting a CDN:**
+    - **Cost** — CDN bandwidth is not free. Cache only content where the performance benefit justifies the price.
+    - **Cache expiry (TTL)** — too long and users get stale content; too short and cache-hit rates drop, increasing origin load.
+    - **Fallback** — if the CDN becomes unavailable, clients should be able to fall back to the origin server.
+    - **Cache invalidation** — plan how to purge stale content (object versioning, CDN API calls, etc.).
+  </Accordion>
+
+  <Accordion title="What is the difference between circuit switching and packet switching?">
+    **Circuit switching** establishes a dedicated, reserved path between two hosts before any data is sent and holds that path for the duration of the communication. Bandwidth is guaranteed and consistent, but the circuit is idle whenever no data is being transmitted. The classic example is the public switched telephone network (PSTN).
+
+    **Packet switching** breaks messages into packets, each of which is routed independently toward the destination. Routers select the best available path for each packet, which means the path can change mid-transfer. Packets are reassembled at the destination.
+
+    | Aspect | Circuit switching | Packet switching |
+    |--------|-------------------|------------------|
+    | Resource reservation | Pre-allocated | On-demand |
+    | Efficiency | Low (idle time wasted) | High |
+    | Latency consistency | Stable | Variable |
+    | Fault tolerance | Poor (single path) | Good (re-routing) |
+    | Examples | PSTN, ISDN | Internet, TCP/IP |
+
+    The internet uses packet switching, which is why it can efficiently share bandwidth across millions of simultaneous users.
+  </Accordion>
+
+  <Accordion title="What is HTTP Keep-Alive?">
+    **Keep-Alive** allows multiple HTTP requests and responses to share a single TCP connection, rather than opening a new connection for every request.
+
+    - **HTTP/1.0** opened and closed a TCP connection per request.
+    - **HTTP/1.1** enables Keep-Alive by default. The connection stays open for subsequent requests until the configured timeout expires.
+    - **TCP Keep-Alive** is a separate, lower-level mechanism: the OS sends periodic probe packets on an idle connection to confirm the remote host is still reachable.
+
+    **Advantages:**
+    - Eliminates repeated TCP handshake RTTs.
+    - Reduces CPU and memory overhead from connection setup and teardown.
+    - Lowers overall latency for sequential requests.
+
+    **Disadvantages:**
+    - Idle connections still occupy a socket slot on the server; too many idle connections can exhaust the socket pool.
+    - Long-lived connections can be exploited in slowloris/DoS attacks.
+    - An incorrectly tuned timeout wastes resources (too long) or negates the benefit (too short).
+
+    <Warning>
+      HTTP Keep-Alive and TCP Keep-Alive serve different purposes. HTTP Keep-Alive is about reusing a connection for multiple requests. TCP Keep-Alive is about detecting whether a connection is still alive at the network level.
+    </Warning>
+  </Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,164 @@
+---
+title: "Browser Rendering Pipeline Interview Questions"
+description: "Key interview questions covering the browser rendering pipeline, reflow vs repaint, what happens when you type a URL, and font loading behavior."
+---
+
+Understanding how browsers turn raw HTML, CSS, and JavaScript into pixels on screen is one of the most common topics in frontend interviews. This page covers the critical rendering path from initial network request to final composited frame, along with the performance implications of reflow, repaint, and font loading strategies.
+
+<AccordionGroup>
+  <Accordion title="Explain the browser rendering pipeline step by step.">
+    The browser rendering pipeline is the sequence of steps a browser follows to display a web page. There are six major stages:
+
+    **1. DOM construction**
+
+    The browser receives HTML as raw bytes, converts them to characters, then tokenizes them into HTML tokens. Those tokens are assembled into nodes and organized into the **DOM tree**, where each tag becomes a node with parent-child relationships.
+
+    **2. CSSOM construction**
+
+    CSS files go through the same bytes → characters → tokens process, but the output is the **CSSOM tree**. Each node holds the computed style information for the matching element.
+
+    **3. Render tree construction**
+
+    The browser merges DOM and CSSOM into a **render tree** containing only the nodes that will actually be painted. Elements with `display: none` are excluded entirely.
+
+    **4. Layout (Reflow)**
+
+    The browser traverses the render tree and calculates the exact position and size of every element relative to the viewport. This stage is also called **reflow**. Any change to geometry (width, height, margins) triggers a new layout pass.
+
+    **5. Painting**
+
+    The browser rasterizes each node — drawing text, colors, images, shadows — into pixel layers. Complex graphics or animations with many layers increase paint workload.
+
+    **6. Compositing**
+
+    Individual layers are combined (composited) by the GPU into the final screen image. Properties like `transform` and `opacity` are handled entirely in this stage, bypassing layout and paint, which is why they are preferred for animations.
+
+    ```
+    HTML bytes → DOM
+    CSS bytes  → CSSOM
+                  ↓
+            Render Tree
+                  ↓
+              Layout
+                  ↓
+              Paint
+                  ↓
+            Composite
+    ```
+
+    <Tip>
+      Knowing which stage each CSS property triggers is the basis for most rendering performance questions. `transform` and `opacity` only hit compositing; `color` or `background-color` trigger repaint; geometry properties like `width` trigger reflow.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between reflow and repaint?">
+    **Reflow** is the process by which the browser recalculates the layout of the page — where every element sits and how large it is. It happens when the DOM structure changes or when CSS properties that affect geometry are modified (e.g., `width`, `height`, `margin`, `padding`, `border`). Because reflow propagates through the element tree, changing one node can force the browser to recalculate the position of its children and related ancestors. This makes reflow expensive.
+
+    **Repaint** occurs when an element's visual appearance changes but its geometry does not — for example, changing `background-color` or `color`. The browser only needs to redraw the affected pixels rather than recalculate layout, so repaint is cheaper than reflow. However, it still affects performance.
+
+    | | Reflow | Repaint |
+    |---|---|---|
+    | Triggers | Geometry changes (`width`, `height`, `margin`) | Visual-only changes (`color`, `background`) |
+    | Propagation | Cascades to children and related ancestors | Limited to affected element |
+    | Cost | High | Moderate |
+
+    **Optimization strategies:**
+
+    1. **Minimize reflow-inducing properties.** Set geometry-related styles at initial load and avoid changing them dynamically.
+
+    2. **Use `transform` and `opacity` for animations.** These properties are handled in the compositing stage and do not trigger reflow or repaint, allowing GPU acceleration.
+
+       ```css
+       /* Preferred: only triggers compositing */
+       .box:hover {
+         transform: translateY(-5px);
+       }
+
+       /* Avoid: triggers reflow */
+       .box:hover {
+         top: -5px;
+       }
+       ```
+
+    3. **Use the `will-change` property sparingly.** It hints to the browser to promote an element to its own layer in advance.
+
+       ```css
+       .animated-card {
+         will-change: transform;
+       }
+       ```
+
+       <Warning>
+         Overusing `will-change` causes excessive memory consumption. Apply it only to elements that truly animate.
+       </Warning>
+  </Accordion>
+
+  <Accordion title="What happens when you type google.com and press Enter?">
+    This question tests knowledge of the full network and rendering stack. The key stages are:
+
+    **1. DNS lookup**
+
+    The browser resolves `www.google.com` to an IP address. It first checks its local DNS cache, then queries the operating system's resolver, and finally contacts a recursive DNS server if no cached result exists.
+
+    **2. TCP connection (3-way handshake)**
+
+    With the IP address known, the browser establishes a TCP connection using a three-step handshake:
+    - Client → Server: **SYN** (synchronize)
+    - Server → Client: **SYN-ACK** (synchronize-acknowledge)
+    - Client → Server: **ACK** (acknowledge)
+
+    **3. TLS handshake (for HTTPS)**
+
+    If the site uses HTTPS, a TLS handshake follows the TCP connection. The browser and server exchange certificates, verify identity, negotiate an encryption algorithm, and derive a shared symmetric key. All subsequent data is encrypted with this key.
+
+    **4. HTTP request**
+
+    The browser sends an HTTP request, typically `GET / HTTP/1.1`, along with headers such as `Host`, `Accept`, and `Cookie`.
+
+    **5. Server response**
+
+    The server responds with an HTTP status code (e.g., `200 OK`) and the resource — usually an HTML document.
+
+    **6. Browser rendering pipeline**
+
+    The browser parses the HTML to build the DOM, fetches referenced CSS and JavaScript resources, builds the CSSOM, constructs the render tree, runs layout, paints, and composites the final frame.
+
+    <Note>
+      Each external resource (CSS file, font, script) referenced in the HTML can trigger additional DNS lookups, TCP connections, and TLS handshakes. Resource hints like `preconnect`, `preload`, and `prefetch` reduce this cost.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does browser font loading work, and what are FOUT and FOIT?">
+    When the browser parses a CSS file that contains a `@font-face` rule, it identifies the font file location and format. The browser then either retrieves the font from the local system cache or makes a network request to download it. Web fonts are commonly distributed in `woff` or `woff2` format because of their small size and high compression ratio.
+
+    **FOUT — Flash of Unstyled Text**
+
+    When `font-display: swap` is set, the browser renders text immediately using a fallback font. Once the web font finishes loading, the browser swaps it in. This momentary style change — the "flash" — is FOUT.
+
+    ```css
+    @font-face {
+      font-family: 'MyFont';
+      src: url('/fonts/my-font.woff2') format('woff2');
+      font-display: swap;
+    }
+    ```
+
+    **FOIT — Flash of Invisible Text**
+
+    When `font-display: block` (the default in many browsers) is used, text is hidden until the web font loads. The brief period where text is invisible before it "pops in" is FOIT.
+
+    **Mitigating FOUT and FOIT**
+
+    - **`preload`** — instructs the browser to fetch the font file at high priority, reducing the chance it arrives late:
+
+      ```html
+      <link rel="preload" href="/fonts/my-font.woff2" as="font" crossorigin="anonymous">
+      ```
+
+    - **`font-display: optional`** — if the font does not load within a very short window, the browser keeps the fallback font and never swaps. This avoids layout shifts at the cost of the web font not always being shown.
+
+    <Tip>
+      Pairing `<link rel="preload">` with `font-display: swap` is a common production strategy: the font loads early enough that FOUT is rarely visible, but text is never hidden.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

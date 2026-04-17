@@ -1,0 +1,303 @@
+---
+title: "Deployment and Operations Interview Q&A for Backend"
+description: "Backend interview Q&A on CI/CD, graceful shutdown, zero-downtime deployment, Micrometer, IaC, serverless, health checks, and observability."
+---
+
+Shipping software reliably and keeping it observable in production are as important as writing the software itself. Backend engineers are increasingly expected to understand the full lifecycle — from automated pipelines that build and test code, through deployment strategies that eliminate downtime, to the observability tooling that surfaces failures before users notice them. The questions below cover the deployment and operations topics that appear most often in senior backend interviews.
+
+<AccordionGroup>
+  <Accordion title="What are CI, CD (Delivery), and CD (Deployment) and how do they relate?">
+    **Continuous Integration (CI)** is the practice of merging developer changes into a shared branch frequently — often multiple times a day — and automatically building and testing the result on every merge. The goals are to catch integration bugs early, maintain a consistently releasable codebase, and reduce the cost of finding defects.
+
+    A typical CI pipeline:
+    1. Developer pushes a commit or opens a pull request.
+    2. The CI server (Jenkins, GitHub Actions, Travis CI) triggers a build.
+    3. Automated tests (unit, integration, linting) run against the build artifact.
+    4. If any step fails, the developer is notified immediately and must fix the issue before the change is merged.
+
+    **Continuous Delivery (CD — Delivery)** extends CI by ensuring the build artifact is always in a deployable state. After CI passes, the artifact is promoted through staging environments and validated. However, deploying to production requires a **manual approval step**.
+
+    **Continuous Deployment (CD — Deployment)** removes the manual gate entirely. Every change that passes all automated checks is deployed to production automatically, with no human intervention.
+
+    **Artifact storage** is an important part of CD pipelines. Deployment artifacts (container images, JAR files, compiled bundles) need somewhere to live between being built and being deployed. Common stores include AWS S3, Docker registries (Docker Hub, ECR, GCR), and Sonatype Nexus.
+
+    ```
+    CI/CD pipeline overview:
+    Code commit
+       → Build
+       → Automated tests
+       → [Artifact stored]
+       → Deploy to staging
+       → Integration / smoke tests
+       → [Manual approval]  ← Delivery stops here
+       → Deploy to production  ← Deployment continues automatically
+    ```
+
+    <Note>
+      Most organizations practice Continuous Delivery rather than full Continuous Deployment. Production deployments often carry regulatory, financial, or reputational risk that warrants a human review gate even when automation is mature.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is graceful shutdown and how is it implemented in Spring Boot?">
+    **Graceful shutdown** means the application finishes processing its in-flight requests before it exits, rather than terminating immediately when it receives a stop signal.
+
+    Without graceful shutdown, stopping a server mid-request can cause:
+    - Incomplete database transactions that roll back unexpectedly.
+    - Partial responses delivered to clients, causing errors the client did not initiate.
+    - Corrupted state in external systems if writes were interrupted.
+
+    **How it works in Linux/Unix**
+
+    The operating system sends signals to processes. Two signals are relevant here:
+
+    - **SIGTERM** — a polite request to terminate. The process can catch this signal, finish in-flight work, close connections, and exit cleanly.
+    - **SIGKILL** — an immediate, forced termination. The process cannot catch or ignore this signal; the kernel removes it from memory instantly.
+
+    Graceful shutdown relies on SIGTERM. Container orchestrators (Kubernetes, ECS) send SIGTERM first and only escalate to SIGKILL if the process has not exited within a configurable grace period.
+
+    **Spring Boot configuration**
+
+    ```properties
+    server.shutdown=graceful
+    spring.lifecycle.timeout-per-shutdown-phase=20s
+    ```
+
+    With `server.shutdown=graceful`, Spring stops accepting new requests immediately on receiving SIGTERM, then waits for active requests to complete before shutting down the application context. The timeout setting (20 seconds above) ensures the process does not hang indefinitely if a request is deadlocked or stuck in an infinite loop.
+
+    <Tip>
+      Always test graceful shutdown in a staging environment with realistic traffic. Long-running background jobs — scheduled tasks, batch processors — may need explicit shutdown hooks beyond the HTTP server's grace period.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are the main zero-downtime deployment strategies?">
+    **Zero-downtime deployment** means users never see a service interruption or error caused by a new version being deployed. Three primary strategies achieve this:
+
+    **Rolling deployment**
+
+    Servers are updated one (or a few) at a time. At any given moment, some servers run the old version while others run the new version. Traffic is gradually shifted as servers are cycled.
+
+    - Requires **backward compatibility** between versions — the new version's API must still work correctly with clients using the old version's behavior (and vice versa).
+    - Does not require provisioning extra servers.
+    - Useful for testing a fix on a single server before rolling it out widely.
+
+    **Blue/green deployment**
+
+    A second, identical set of servers ("green") is provisioned and deployed with the new version while the current set ("blue") continues handling live traffic. Once green is validated, the load balancer switches all traffic from blue to green in one atomic step. Blue remains available for an instant rollback.
+
+    - **Fast rollback** — flip the load balancer back to blue if problems appear.
+    - **No version coexistence** — all traffic moves simultaneously, so backward-compatibility concerns are reduced.
+    - **Higher cost** — you pay for two full production environments during the switchover window.
+    - Best suited to large, high-risk releases (major architecture changes, significant refactors).
+
+    **Canary deployment**
+
+    A small percentage of live traffic (e.g., 5–10%) is routed to the new version. The remainder stays on the old version. Metrics (error rate, latency, business KPIs) are monitored for the canary cohort. If the canary is healthy, the percentage is gradually increased to 100%.
+
+    - Enables **real-world validation** with a limited blast radius if the new version has defects.
+    - Ideal for A/B testing or measuring the impact of a performance optimization.
+    - Like rolling deployment, requires backward compatibility between versions during the transition.
+
+    | Strategy | Cost | Rollback speed | Version coexistence | Best use case |
+    |----------|------|----------------|---------------------|---------------|
+    | Rolling | Low | Moderate | Yes | Bug fixes, minor updates |
+    | Blue/Green | High | Instant | No | Major releases |
+    | Canary | Moderate | Fast | Yes | Risk-sensitive rollouts, A/B tests |
+  </Accordion>
+
+  <Accordion title="What is Micrometer and how does it relate to Spring Boot Actuator?">
+    **Micrometer** is a vendor-neutral metrics instrumentation library for the JVM. It provides a single, consistent API for recording measurements — counters, timers, gauges, distribution summaries — and can export those measurements to any of a wide range of monitoring backends: Prometheus, Datadog, Graphite, InfluxDB, and others. Switching backends requires only a dependency change, not an API rewrite.
+
+    **Relationship with Spring Boot Actuator**
+
+    Spring Boot Actuator exposes operational endpoints (`/actuator/health`, `/actuator/metrics`, `/actuator/info`) and collects runtime data about the application. Internally, Actuator uses Micrometer to record metrics such as JVM memory usage, HTTP request counts and latencies, database connection pool state, and thread pool saturation. Actuator is the management interface; Micrometer is the instrumentation layer underneath it.
+
+    **Defining custom metrics**
+
+    ```java
+    @Service
+    public class OrderService {
+
+        private final Counter orderCounter;
+        private final Timer orderTimer;
+
+        public OrderService(MeterRegistry registry) {
+            this.orderCounter = registry.counter("orders.created.total", "region", "kr");
+            this.orderTimer   = registry.timer("orders.processing.duration", "region", "kr");
+        }
+
+        public void processOrder(Order order) {
+            orderCounter.increment();
+            orderTimer.record(() -> {
+                // business logic
+                doProcess(order);
+            });
+        }
+    }
+    ```
+
+    Three fundamental meter types:
+
+    | Type | Description | Example use |
+    |------|-------------|-------------|
+    | **Counter** | Monotonically increasing count | Total HTTP requests, total errors |
+    | **Timer** | Measures duration and count of events | Request processing time, DB query latency |
+    | **Gauge** | Instantaneous snapshot of a value | Active sessions, queue depth, memory used |
+
+    <Tip>
+      A common production monitoring stack is: Spring Boot Actuator + Micrometer → Prometheus (scrapes and stores metrics) → Grafana (queries and visualizes). Grafana dashboards can be set up to alert when error rates or latency percentiles exceed thresholds.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is Infrastructure as Code (IaC) and what are its pros and cons?">
+    **Infrastructure as Code (IaC)** means defining and provisioning infrastructure (servers, networks, databases, storage, IAM policies) through machine-readable configuration files rather than through manual steps in a cloud console. The infrastructure definition lives in version control alongside the application code.
+
+    **Two approaches:**
+
+    *Declarative IaC* — you describe the **desired end state** and the tool figures out how to reach it. If the current state already matches, nothing changes. Examples: **Terraform**, **AWS CloudFormation**.
+
+    *Imperative IaC* — you describe the **steps to execute** to reach the desired state. You control the sequence of operations. Examples: **Ansible**, **AWS CDK** (when used imperatively).
+
+    **Advantages:**
+
+    - **Version control** — infrastructure changes are reviewed, diffed, and merged the same way code changes are. Git history shows who changed what and when.
+    - **Self-documenting** — the configuration files are authoritative documentation of the infrastructure. No need to maintain separate runbooks.
+    - **Automation** — spinning up or tearing down an environment is a single command, eliminating manual steps and the human errors they introduce.
+    - **Reusability** — modules and templates can be shared across projects, accelerating new environment setup.
+
+    **Disadvantages:**
+
+    - **Learning curve** — tools like Terraform and CloudFormation have their own DSLs, state management concepts, and provider ecosystems that take time to master.
+    - **State drift** — if someone manually changes infrastructure outside the IaC tool, the tool's state file diverges from reality, leading to unpredictable behavior on the next apply.
+    - **Debugging difficulty** — when a provisioning run fails partway through, diagnosing and recovering the state can be complex.
+
+    <Note>
+      Storing Terraform state in a remote backend (e.g., S3 with DynamoDB locking) is essential for team environments. Local state files cause conflicts and are lost when machines are rebuilt.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is virtualization and how do virtual machines differ from containers?">
+    **Virtualization** is the process of creating a logical abstraction over physical hardware so that a single machine's resources (CPU, memory, storage, network) can be shared by multiple isolated environments.
+
+    **Virtual machines (VMs)**
+
+    A **hypervisor** is installed on the physical host. It partitions hardware resources and runs multiple **guest operating systems** side by side, each in its own VM. Each VM includes a full OS kernel, system libraries, and the application.
+
+    Two types of hypervisors:
+    - **Type 1 (bare-metal)** — runs directly on hardware, no host OS required (KVM, Hyper-V). Used in data centers.
+    - **Type 2 (hosted)** — runs as an application on a host OS (VirtualBox, VMware Workstation). Used on developer laptops.
+
+    **Containers**
+
+    Containers share the host OS kernel and use Linux namespaces and cgroups to isolate processes and resources. A container image packages the application and its dependencies but not the OS kernel. Docker is the most common container runtime; Kubernetes orchestrates containers at scale.
+
+    **Comparison:**
+
+    | | Virtual machine | Container |
+    |-|-----------------|-----------|
+    | **OS** | Full guest OS per VM | Shares host kernel |
+    | **Size** | GBs | MBs |
+    | **Startup time** | Minutes | Seconds |
+    | **Isolation** | Strong (hardware-level) | Weaker (kernel shared) |
+    | **Best for** | Multi-OS environments, strict isolation | Cloud-native, microservices, CI/CD |
+
+    VMs and containers are complementary, not competing. A common production pattern is to run containers *inside* VMs — the VM provides hardware isolation and multi-tenancy, while containers enable fast, lightweight application deployment within that boundary.
+
+    <Note>
+      In cloud environments, you typically interact with VMs (EC2 instances, GCE VMs) and containers (ECS, GKE pods) without managing the hypervisor directly. The cloud provider abstracts physical hardware entirely.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is serverless computing and how is backend code developed in a serverless architecture?">
+    **Serverless** does not mean there are no servers — it means the cloud provider fully manages the servers, including provisioning, scaling, patching, and OS maintenance. You deploy code or use managed services, and the provider handles everything underneath.
+
+    Contrast this with a traditional EC2 instance, where you are responsible for OS security patches, disk management, and manual capacity planning. In a serverless model, those responsibilities transfer entirely to the provider.
+
+    **Key properties:**
+    - **Automatic scaling** — the platform scales from zero to thousands of instances based on demand, then scales back down. You never over-provision.
+    - **Pay-per-use** — billing is based on execution time and resources consumed, not on idle capacity.
+    - **No infrastructure management** — no AMIs to update, no SSH access to configure.
+
+    **FaaS — Function as a Service**
+
+    **FaaS** (e.g., AWS Lambda, Google Cloud Functions) is the serverless compute model for custom business logic. A function is a small, stateless code unit triggered by an event — an HTTP request, a message from a queue, a file upload to S3. The function runs, returns a result, and the instance may be immediately destroyed.
+
+    ```python
+    # AWS Lambda handler example
+    def handler(event, context):
+        name = event.get("name", "world")
+        return {"statusCode": 200, "body": f"Hello, {name}!"}
+    ```
+
+    **BaaS — Backend as a Service**
+
+    **BaaS** (e.g., Firebase Authentication, AWS Cognito) provides fully managed backend capabilities — authentication, push notifications, real-time databases — that would otherwise require building and operating a dedicated service. You integrate via SDK and pay for usage, with no server to manage.
+
+    **Trade-offs:**
+
+    - **Cold starts** — when a function has not been invoked recently, the provider must start a new instance. This first invocation has higher latency (the "cold start penalty"). Mitigation strategies include provisioned concurrency (keeping instances warm) and choosing runtimes with faster cold starts (Go, Rust).
+    - **Execution limits** — Lambda functions have a maximum runtime (15 minutes), memory cap (10 GB), and payload size limit. Long-running or memory-intensive workloads are not a good fit.
+    - **Vendor lock-in** — serverless architectures often depend on provider-specific trigger integrations (SNS, SQS, EventBridge on AWS). Migrating to another provider is non-trivial.
+  </Accordion>
+
+  <Accordion title="What is a health check and why does it matter for load balancers?">
+    A **health check** is a mechanism by which a monitoring system or load balancer periodically verifies that a server instance is operating correctly and is capable of handling traffic. If an instance fails its health check, it is automatically removed from the pool of traffic recipients.
+
+    **How health checks work**
+
+    Two common probe types:
+    - **HTTP health check** — the load balancer issues an HTTP request to a designated endpoint (e.g., `GET /actuator/health`). A `2xx` response indicates healthy; any other response or a timeout indicates unhealthy.
+    - **TCP health check** — the load balancer attempts to open a TCP connection to a specific port. A successful connection indicates the process is alive, though it does not verify application-level correctness.
+
+    **Why health checks matter**
+
+    Without health checks, a load balancer has no way to distinguish a healthy server from one that has run out of memory, crashed, or entered a deadlock. It would continue sending traffic to unhealthy instances, resulting in errors for users even when healthy instances are available.
+
+    A concrete scenario: with a load balancer distributing traffic to servers A and B, if A's health check starts failing (CPU exhausted, memory OOM, internal error), the load balancer routes all traffic to B while A recovers. Without a health check, roughly half of all user requests would hit the broken server A.
+
+    An additional consideration: if clients retry failed requests, sending traffic to an unhealthy instance amplifies the problem. Unhealthy instances receive retried traffic on top of the original load, accelerating their degradation.
+
+    **Spring Boot Actuator health endpoint**
+
+    Spring Boot Actuator exposes `/actuator/health` out of the box. It aggregates the status of configurable health indicators — database connectivity, disk space, external dependencies — and returns a unified `UP` or `DOWN` status. Custom indicators can be added by implementing `HealthIndicator`.
+
+    ```properties
+    management.endpoint.health.show-details=always
+    management.health.db.enabled=true
+    management.health.diskspace.enabled=true
+    ```
+
+    <Tip>
+      Design health checks to reflect actual readiness to serve traffic, not just process liveness. A server that is running but cannot reach its database should report `DOWN` so the load balancer excludes it, even though the JVM is alive.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between logs and metrics, and why does that distinction matter?">
+    **Logs** are time-stamped, discrete records of events that occurred in a system. Each log entry describes something that happened: a request was received, an exception was thrown, a user authenticated. Logs are invaluable for diagnosing specific incidents — you can trace the exact sequence of events that led to a failure.
+
+    **Metrics** are numerical measurements of system behavior aggregated over time. A metric does not describe an individual event; it describes the statistical distribution of many events. Examples: requests per second, p99 latency, CPU utilization percentage, active database connections.
+
+    | | Logs | Metrics |
+    |-|------|---------|
+    | **Format** | Structured or unstructured text | Numerical time series |
+    | **Granularity** | Per-event | Aggregated over intervals |
+    | **Use case** | Incident investigation, debugging | Alerting, capacity planning, trend analysis |
+    | **Volume** | High (every event recorded) | Low (sampled or aggregated) |
+    | **Tooling** | Logback, ELK Stack, Loki | Micrometer, Prometheus, Grafana |
+
+    **Why `System.out.println` is not a substitute for a logging framework**
+
+    `System.out.println` writes synchronously to stdout without any concept of log levels, filtering, or formatting. It cannot be silenced in production without a code change, and it cannot be configured to route to different destinations (files, remote aggregators). A logging framework like Logback provides:
+    - **Log levels** (`DEBUG`, `INFO`, `WARN`, `ERROR`) — suppress verbose output in production without redeploying.
+    - **Appenders** — route logs to files, Loki, Elasticsearch, or a SIEM simultaneously.
+    - **MDC (Mapped Diagnostic Context)** — attach contextual data (request ID, user ID, trace ID) to every log line emitted during a request without passing it through every method.
+
+    A practical observability stack for a Spring Boot application:
+    - **Logs**: Logback → Loki (7-day retention) with MDC for distributed trace correlation.
+    - **Metrics**: Spring Boot Actuator + Micrometer → Prometheus → Grafana dashboards with alerting rules.
+    - Key metrics to collect: CPU and JVM heap usage, Tomcat thread pool saturation, DB connection pool state, `ERROR`-level log rate.
+
+    <Warning>
+      Logging at `DEBUG` or `TRACE` level in production can generate enormous I/O volumes, mask meaningful signals in noise, and fill disk space rapidly. Set the default production log level to `INFO` or `WARN` and use dynamic log-level endpoints (Actuator's `/actuator/loggers`) to elevate verbosity temporarily when debugging a live issue.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,343 @@
+---
+title: "Spring MVC and Request Handling Interview Q&A"
+description: "Key interview questions on Spring MVC request flow, filters, interceptors, controllers, Tomcat, AutoConfiguration, and layered architecture."
+---
+
+Spring MVC is the backbone of most Java web applications, and interviews frequently probe how deeply candidates understand the full lifecycle of an HTTP request — from the moment it hits the server to the moment a response is written back. This page covers the essential concepts: how `DispatcherServlet` orchestrates request processing, the difference between servlet filters and Spring interceptors, how `@Controller` and `@RestController` diverge, and the broader ecosystem topics like Tomcat, Spring Boot's auto-configuration, and layered architecture.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between using @ResponseBody (or ResponseEntity<T>) and not using it?">
+    When a controller method is annotated with `@ResponseBody`, or returns a `ResponseEntity<T>`, Spring writes the return value **directly into the HTTP response body**. Java objects are automatically serialized to JSON, XML, or another format depending on the `Accept` header and available `HttpMessageConverter` implementations.
+
+    Without `@ResponseBody`, Spring treats the return value as a **view name**. It passes that name to a `ViewResolver`, which locates the corresponding template (JSP, Thymeleaf, etc.) and renders it into an HTML response, optionally populating it with model attributes.
+
+    **Which is better — `@ResponseBody` or `ResponseEntity<T>`?**
+
+    - `@ResponseBody` keeps code concise but offers no direct control over the HTTP status code or response headers.
+    - `ResponseEntity<T>` lets you set the status code and headers explicitly, at the cost of slightly more verbose code.
+
+    ```java
+    // Concise — always returns 200 OK
+    @GetMapping("/users/{id}")
+    @ResponseBody
+    public UserDto getUser(@PathVariable Long id) {
+        return userService.findById(id);
+    }
+
+    // Flexible — can return 201 Created, custom headers, etc.
+    @PostMapping("/users")
+    public ResponseEntity<UserDto> createUser(@RequestBody CreateUserRequest request) {
+        UserDto created = userService.create(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+    ```
+
+    <Tip>
+      Choose based on your team's conventions. `ResponseEntity<T>` is the better choice whenever you need fine-grained control over the HTTP response.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between a Servlet Filter and a Spring Interceptor?">
+    Both filters and interceptors let you insert cross-cutting logic around HTTP request processing, but they operate at different levels of the stack.
+
+    **Servlet Filter**
+
+    Filters are part of the **servlet container** (e.g., Tomcat). Every request passes through the filter chain *before* it ever reaches `DispatcherServlet`. Filters implement `jakarta.servlet.Filter` and work via the `doFilter` method, which gives access to the raw `ServletRequest`/`ServletResponse`.
+
+    Common uses: CORS handling, request encoding, authentication tokens, caching, compression.
+
+    **Spring Interceptor**
+
+    Interceptors are part of **Spring MVC** and execute after `DispatcherServlet` has matched the request to a handler. They implement `HandlerInterceptor` and expose three lifecycle hooks:
+
+    - `preHandle` — before the controller method executes
+    - `postHandle` — after the controller method, before view rendering
+    - `afterCompletion` — after the view is rendered (or the response is fully written)
+
+    Common uses: authentication checks, per-request logging, session validation, performance monitoring.
+
+    | | Servlet Filter | Handler Interceptor |
+    |---|---|---|
+    | Interface | `jakarta.servlet.Filter` | `HandlerInterceptor` |
+    | Container level | Servlet container (Tomcat) | Spring MVC |
+    | Executes | Before/after `DispatcherServlet` | Before/after the controller handler |
+    | Access to handler | No | Yes — can inspect annotations on the handler method |
+    | Configuration | `web.xml` or `@WebFilter` | `WebMvcConfigurer#addInterceptors` |
+
+    <Note>
+      Because filters sit outside Spring's context, they cannot inject Spring beans directly (without workarounds like `DelegatingFilterProxy`). Interceptors, being Spring-managed, have full access to the application context.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does Spring MVC handle an HTTP request from start to finish?">
+    Spring MVC follows a **Front Controller** pattern. `DispatcherServlet` is the single entry point that delegates to various components.
+
+    **When returning a View (server-side rendering):**
+
+    1. An HTTP request arrives. `DispatcherServlet` acts as the front controller.
+    2. `HandlerMapping` resolves the URL to the matching handler (controller method).
+    3. `DispatcherServlet` selects the appropriate `HandlerAdapter` to invoke the handler.
+    4. The `HandlerAdapter` calls the controller method.
+    5. The controller populates a `Model` object and returns a view name string.
+    6. `ViewResolver` resolves the view name to a concrete view (e.g., a Thymeleaf template).
+    7. The view renders the model into an HTML response.
+
+    **When returning JSON/data (via `@ResponseBody` or `@RestController`):**
+
+    The flow is similar up to step 4, but instead of `ViewResolver`:
+
+    - `RequestMappingHandlerAdapter` invokes `ArgumentResolver` to deserialize the request body (using `HttpMessageConverter` / Jackson `ObjectMapper`) into method parameters.
+    - The controller executes business logic and returns a Java object.
+    - A `ReturnValueHandler` calls `HttpMessageConverter` to serialize the return value (e.g., to JSON) and write it to the response body.
+
+    ```
+    HTTP Request
+        └─► DispatcherServlet
+                └─► HandlerMapping  →  find handler
+                └─► HandlerAdapter  →  invoke controller
+                        └─► ArgumentResolver + HttpMessageConverter  (request deserialization)
+                        └─► Controller method
+                        └─► ReturnValueHandler + HttpMessageConverter (response serialization)
+    ```
+
+    The `Content-Type` and `Accept` headers jointly determine which `HttpMessageConverter` is selected.
+  </Accordion>
+
+  <Accordion title="What is the difference between @Controller and @RestController?">
+    The difference is in how each annotation handles the **HTTP response**.
+
+    **`@Controller`** marks a class as a Spring MVC controller whose methods return view names (or model-and-view objects). The `ViewResolver` interprets the return value to locate and render a template such as a Thymeleaf or JSP page.
+
+    **`@RestController`** is a convenience annotation that combines `@Controller` and `@ResponseBody`. Every method's return value is automatically serialized to JSON (or XML) and written directly to the HTTP response body — there is no view resolution.
+
+    ```java
+    // Returns an HTML view (Thymeleaf, JSP, etc.)
+    @Controller
+    public class PageController {
+        @GetMapping("/home")
+        public String home(Model model) {
+            model.addAttribute("message", "Hello");
+            return "home"; // resolved to templates/home.html
+        }
+    }
+
+    // Returns JSON — equivalent to @Controller + @ResponseBody on every method
+    @RestController
+    @RequestMapping("/api/users")
+    public class UserApiController {
+        @GetMapping("/{id}")
+        public UserDto getUser(@PathVariable Long id) {
+            return userService.findById(id); // serialized to JSON
+        }
+    }
+    ```
+
+    <Tip>
+      Use `@Controller` for traditional server-side rendered applications and `@RestController` for REST APIs.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between @RequestBody and @ModelAttribute?">
+    Both annotations bind incoming request data to a Java object, but they read from different parts of the request.
+
+    **`@RequestBody`** reads from the **HTTP request body** (typically JSON or XML). Internally it uses `HttpMessageConverter` — specifically Jackson's `ObjectMapper` — to deserialize the payload into a Java object.
+
+    Requirements for deserialization:
+    - A no-argument constructor (or, for Java records, the canonical all-fields constructor Jackson uses automatically)
+    - Getter methods (or public fields)
+
+    ```java
+    @PostMapping("/orders")
+    public ResponseEntity<OrderDto> createOrder(@RequestBody CreateOrderRequest request) {
+        // request is populated from the JSON request body
+    }
+    ```
+
+    **`@ModelAttribute`** binds **query parameters** or **`multipart/form-data`** fields to a Java object. Internally, `ModelAttributeMethodProcessor` locates the appropriate constructor and sets the fields.
+
+    It also has a method-level use case: adding attributes to the `Model` before any handler method is invoked:
+
+    ```java
+    // Method-level: add to model for all handlers in this controller
+    @ModelAttribute("categories")
+    public List<String> populateCategories() {
+        return List.of("Electronics", "Books", "Clothing");
+    }
+
+    // Parameter-level: bind form data
+    @PostMapping("/products")
+    public String createProduct(@ModelAttribute ProductForm form) {
+        // form is populated from request parameters or multipart/form-data
+    }
+    ```
+
+    | | `@RequestBody` | `@ModelAttribute` |
+    |---|---|---|
+    | Data source | HTTP body (JSON/XML) | Query params or form data |
+    | Converter | `HttpMessageConverter` (Jackson) | `ModelAttributeMethodProcessor` |
+    | Typical use | REST APIs | Form submissions, MVC views |
+  </Accordion>
+
+  <Accordion title="What is Tomcat and how does it relate to servlets?">
+    **Tomcat** is a **Web Application Server (WAS)** — specifically a servlet container (also called a web container). It combines a basic web server with a servlet container to handle both static and dynamic HTTP requests.
+
+    Tomcat's responsibilities include:
+    - Receiving HTTP requests and sending responses
+    - Managing the servlet lifecycle (`init`, `service`, `destroy`)
+    - Mapping request URLs to the correct servlet
+    - Managing the filter chain
+    - Processing JSPs
+
+    **What is a servlet?**
+
+    A servlet is a Java specification for handling web requests. Its lifecycle follows these steps:
+
+    1. The user's request arrives at the servlet container.
+    2. The container creates `HttpServletRequest` and `HttpServletResponse` objects.
+    3. The container locates the servlet registered for that URL path.
+    4. It calls the servlet's `service()` method, which delegates to `doGet()`, `doPost()`, etc.
+    5. The servlet writes a response via `HttpServletResponse`.
+
+    **Servlet lifecycle:**
+
+    - **`init()`** — called once when the servlet is first instantiated
+    - **`service()`** — called for every request
+    - **`destroy()`** — called when the servlet is being shut down
+
+    In a Spring Boot application, `DispatcherServlet` itself is a servlet registered with Tomcat. Spring Boot embeds Tomcat by default, so no separate server installation is needed.
+  </Accordion>
+
+  <Accordion title="How does Spring Boot AutoConfiguration work?">
+    Auto-configuration is triggered by the `@SpringBootApplication` annotation, which meta-annotates `@EnableAutoConfiguration`.
+
+    ```java
+    @Target({ElementType.TYPE})
+    @Retention(RetentionPolicy.RUNTIME)
+    @Documented
+    @Inherited
+    @AutoConfigurationPackage
+    @Import({AutoConfigurationImportSelector.class})
+    public @interface EnableAutoConfiguration {
+        String ENABLED_OVERRIDE_PROPERTY = "spring.boot.enableautoconfiguration";
+        Class<?>[] exclude() default {};
+        String[] excludeName() default {};
+    }
+    ```
+
+    `@EnableAutoConfiguration` uses `@Import(AutoConfigurationImportSelector.class)` to load auto-configuration classes. `AutoConfigurationImportSelector` implements `selectImports()`, which internally calls `getAutoConfigurationEntry()` to determine which configurations to import. The process:
+
+    1. **Gather candidates** — `getCandidateConfigurations()` reads `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` from every JAR on the classpath.
+    2. **Remove duplicates** — `removeDuplicates()` deduplicates the list.
+    3. **Determine exclusions** — `getExclusions()` reads any classes explicitly excluded via `@SpringBootApplication(exclude = ...)`.
+    4. **Apply exclusions** — removes excluded configurations.
+    5. **Apply filters** — `getConfigurationClassFilter().filter()` uses `@ConditionalOn*` annotations to keep only configurations relevant to the current classpath and environment.
+
+    <Note>
+      Each auto-configuration class is a `@Configuration` class annotated with conditions like `@ConditionalOnClass`, `@ConditionalOnMissingBean`, or `@ConditionalOnProperty`. This means Spring Boot only activates a configuration when its conditions are met — for example, `DataSourceAutoConfiguration` only activates when a `DataSource` dependency is on the classpath.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are the key differences between Spring Framework and Spring Boot?">
+    **Spring Framework** is a large-scale enterprise Java framework. Using it directly requires manually configuring the Spring container, registering beans, setting up database connections, transaction management, and deploying to an externally managed application server (like a standalone Tomcat installation).
+
+    **Spring Boot** is a tool built on top of Spring Framework that removes that manual setup burden.
+
+    | Feature | Spring Framework | Spring Boot |
+    |---|---|---|
+    | Configuration | Manual (`@Configuration`, XML) | Auto-configured via `@SpringBootApplication` |
+    | Dependency management | Developer manages individual library versions | Starter POMs provide curated, compatible dependency sets |
+    | Embedded server | External WAS required | Tomcat/Jetty/Undertow embedded — runs as a standalone JAR |
+    | Deployment | WAR file deployed to an app server | Self-contained executable JAR |
+
+    **Spring Boot's main features:**
+
+    1. **Auto Configuration** — `@EnableAutoConfiguration` wires up common infrastructure (DataSource, JPA, Security, etc.) based on what is on the classpath.
+    2. **Starter dependencies** — e.g., `spring-boot-starter-web` bundles Spring MVC, Jackson, and embedded Tomcat with compatible versions.
+    3. **Embedded server** — the JAR contains Tomcat (or an alternative), so the application is self-contained and can be started with `java -jar`.
+
+    <Tip>
+      Spring Boot does not replace Spring Framework — it is Spring Framework with sensible defaults and convention-over-configuration applied.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between a Web Server and a WAS (Web Application Server)?">
+    **Web Server** serves **static content** — HTML, CSS, JavaScript, images — directly from the filesystem. It can also forward dynamic requests upstream to a WAS. Examples: Apache HTTP Server, Nginx.
+
+    **WAS (Web Application Server)** — in the Java ecosystem this means a servlet container — handles **dynamic content**: executing application logic, interacting with databases, and generating responses programmatically. Example: Tomcat.
+
+    **Why use both a web server and a WAS together?**
+
+    Delegating all traffic solely to the WAS can cause overload. Separating the two provides several advantages:
+
+    - **Separation of concerns** — the WAS focuses on business logic; the web server handles static files.
+    - **Resource scaling** — scale the web server independently when static traffic increases; scale the WAS when application logic is the bottleneck.
+    - **Load balancing** — the web server can distribute traffic across multiple WAS instances.
+    - **SSL/TLS termination, caching, and compression** — handled efficiently at the web server tier.
+  </Accordion>
+
+  <Accordion title="What is the PRG (Post/Redirect/Get) pattern?">
+    The **PRG pattern** (Post/Redirect/Get) is a web design pattern that prevents duplicate form submissions caused by browser page refreshes or the back button.
+
+    **The problem:** When a user submits an order form (POST) and then refreshes the result page, the browser re-sends the POST request — potentially creating a duplicate order.
+
+    **The solution — three steps:**
+
+    1. **Post** — the client sends a POST request; the server processes it (writes to the database, etc.).
+    2. **Redirect** — the server responds with `302 Found` and a `Location` header pointing to a result URL.
+    3. **Get** — the browser follows the redirect and performs a GET request to the result URL; the server returns the final response page.
+
+    Because the browser's last request was a GET, refreshing the page simply re-issues the GET — no duplicate data modification occurs.
+
+    ```java
+    @PostMapping("/orders")
+    public String submitOrder(@ModelAttribute OrderForm form, RedirectAttributes attrs) {
+        Long orderId = orderService.create(form);
+        attrs.addAttribute("id", orderId);
+        return "redirect:/orders/{id}"; // 302 → browser follows with GET /orders/{id}
+    }
+
+    @GetMapping("/orders/{id}")
+    public String orderConfirmation(@PathVariable Long id, Model model) {
+        model.addAttribute("order", orderService.findById(id));
+        return "order-confirmation";
+    }
+    ```
+
+    <Note>
+      PRG is most relevant for non-idempotent POST requests. Idempotent operations (e.g., GET, PUT with the same payload) do not have the duplicate-submission problem.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is layered architecture and what is the sinkhole anti-pattern?">
+    **Layered architecture** organizes software into horizontal layers, each responsible for a distinct concern. A classic three-layer model:
+
+    - **Presentation Layer** — handles user input and HTTP request/response (controllers)
+    - **Domain / Service Layer** — contains business logic
+    - **Data Source Layer** — manages database access and data manipulation (repositories)
+
+    Benefits: each layer can be independently extended, replaced, or tested.
+
+    **Sinkhole anti-pattern**
+
+    A sinkhole occurs when a middle layer does nothing meaningful — it merely receives a request and passes it straight through to the layer below, adding no logic of its own.
+
+    ```java
+    @Service
+    public class OrderService {
+
+        private OrderDao orderDao;
+
+        // Sinkhole: no business logic, just delegates
+        public OrderResponse getOrder(Long orderId) {
+            return orderDao.getOrderById(orderId);
+        }
+    }
+    ```
+
+    This wastes CPU/memory by routing through an empty layer, and bloats the codebase with pass-through code.
+
+    <Warning>
+      The sinkhole anti-pattern is not always wrong. Bypassing the service layer and allowing the presentation layer to call the data layer directly reduces consistency and can require extra documentation and team communication. Evaluate the trade-offs and establish a team convention.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

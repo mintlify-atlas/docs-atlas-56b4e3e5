@@ -1,0 +1,172 @@
+---
+title: "Messaging and Async Processing Interview Q&A"
+description: "Interview questions on synchronous vs asynchronous, concurrency vs parallelism, async system integration, the transactional outbox pattern, and event sourcing."
+---
+
+Asynchronous processing and message-driven architectures unlock the scalability and decoupling that high-traffic backend systems depend on. At the same time, they introduce subtle failure modes — lost messages, ordering violations, and dual-write inconsistencies — that interviewers probe carefully. The questions below build from the foundational concepts of sync vs async up to the patterns (transactional outbox, event sourcing) that solve real production problems.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between synchronous and asynchronous processing?">
+    **Synchronous** processing means the caller waits for the callee to finish before continuing. If function A calls function B synchronously, A is blocked until B returns. Work proceeds sequentially.
+
+    **Asynchronous** processing means the caller does not wait. Function A triggers function B and immediately continues executing. B's result, when ready, is delivered via a callback, a promise, or an event.
+
+    **Blocking vs synchronous — what is the distinction?**
+
+    The terms are related but not identical. Synchronous describes the *ordering* of work: tasks happen in sequence, one after another. Blocking describes the *state* of the caller: its execution thread is halted and cannot do other work while it waits. A synchronous call is typically also blocking, but it is possible to have non-blocking synchronous designs (e.g., polling) or blocking asynchronous operations (e.g., `Future.get()` in Java).
+
+    **Asynchronous processing in Spring**
+
+    Spring's `@Async` annotation runs a method on a separate thread from a managed thread pool:
+
+    ```java
+    @Service
+    public class NotificationService {
+
+        @Async
+        public void sendEmail(String address) {
+            // Runs on a separate thread — caller is not blocked
+            emailClient.send(address);
+        }
+    }
+    ```
+
+    Three important caveats when using `@Async`:
+
+    1. **Exception propagation** — exceptions thrown inside an `@Async` method are not propagated to the caller. You must register an `AsyncUncaughtExceptionHandler` to handle them explicitly.
+    2. **Proxy bypass** — `@Async` works through Spring's AOP proxy. Calling an `@Async` method from within the same class bypasses the proxy, so the method runs synchronously. Always call `@Async` methods from a different bean.
+    3. **Transaction isolation** — a transaction started inside an `@Async` method is independent of the caller's transaction. Do not rely on transactional context propagating across async boundaries.
+  </Accordion>
+
+  <Accordion title="What is the difference between concurrency and parallelism?">
+    **Concurrency** is a *logical* concept: multiple tasks appear to make progress at the same time, but on a single CPU core they are actually interleaved. The operating system switches between tasks so rapidly that they seem simultaneous. During I/O waits — network requests, file reads, database queries — the CPU would otherwise sit idle, so context-switching to another thread keeps it busy.
+
+    **Parallelism** is a *physical* concept: multiple tasks genuinely execute at the same instant, each on its own CPU core. There is no interleaving — each core works independently.
+
+    A useful mental model:
+
+    | | Concurrency | Parallelism |
+    |-|-------------|-------------|
+    | **Hardware** | Single or multi-core | Multi-core required |
+    | **Simultaneity** | Logical (interleaved) | Physical (simultaneous) |
+    | **Best for** | I/O-bound workloads | CPU-bound workloads |
+    | **Risk** | Deadlock, race condition, starvation | Synchronization overhead |
+
+    A web server handling thousands of simultaneous HTTP connections on a small number of threads is concurrent. A machine learning training job distributing matrix multiplications across 64 GPU cores is parallel.
+
+    <Note>
+      Concurrent programs must be designed defensively. Shared mutable state accessed by multiple threads without synchronization leads to race conditions (unpredictable results) and can lead to deadlocks (circular waiting) or starvation (one thread perpetually denied access). Java's `synchronized`, `ReentrantLock`, and `java.util.concurrent` utilities address these hazards.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What patterns exist for asynchronous integration between services?">
+    When two separate systems need to exchange data without blocking each other, three main integration patterns are available:
+
+    **Messaging system (e.g., Kafka, RabbitMQ)**
+
+    A message broker sits between the two systems. The producer writes a message to the broker; the consumer reads and processes it independently. This decouples systems and delivers high throughput.
+
+    Considerations:
+    - **Message loss** — what happens if a broker node fails before the consumer reads the message?
+    - **Ordering** — Kafka guarantees ordering within a partition; cross-partition ordering requires additional design.
+    - **Dual-write atomicity** — if a single transaction must both save to the database *and* publish to the broker, you need a pattern like the transactional outbox (see below) to keep them consistent.
+
+    **Database as message store**
+
+    The producer inserts message records into a dedicated database table. A relay process polls that table and forwards new records to the consumer. Because both the business record and the message record are written in the same database transaction, ordering and atomicity are guaranteed and there is no risk of message loss.
+
+    The trade-off is operational overhead: the schema must evolve as the message format changes, and you must define retention and cleanup policies for processed rows.
+
+    **Change Data Capture (CDC)**
+
+    A CDC agent (e.g., Debezium) reads the database's binary transaction log and streams change events to consumers. No application-level message production is needed — the business logic writes only to the database, and the CDC agent detects and propagates changes automatically.
+
+    CDC guarantees transactional consistency and keeps application code simple. However, the change log contains *what* changed, not *why* it changed, so it may lack the business context needed by consumers.
+
+    <Tip>
+      Kafka with a transactional outbox is the most common pattern in high-throughput microservice architectures. CDC is popular in data pipeline and event-driven analytics scenarios where inserting message production into application code is impractical.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the transactional outbox pattern and why is it needed?">
+    The **transactional outbox pattern** solves the *dual-write problem*: reliably publishing an event to a message broker at the same time as persisting a database change, without risking a state where one succeeds and the other fails.
+
+    **The problem**
+
+    Consider this naive implementation:
+
+    ```java
+    @Transactional
+    public void createProduct() {
+        Product product = new Product("New item");
+        productRepository.save(product);                            // DB write
+        eventPublisher.propagate(new NewProductEvent(product.getId())); // Broker publish
+    }
+    ```
+
+    Two failure scenarios exist:
+    - The database write commits but the broker publish fails → the event is lost.
+    - The broker publish succeeds but the database commit fails and rolls back → a phantom event exists with no corresponding record.
+
+    Either scenario corrupts system consistency.
+
+    **The solution**
+
+    Instead of publishing to the broker directly, write the event to an **outbox table** inside the same database transaction as the business record:
+
+    ```java
+    @Transactional
+    public void createProduct() {
+        Product product = new Product("New item");
+        productRepository.save(product);
+        // Save the event to the outbox table — same transaction, same atomicity guarantee
+        outboxRepository.save(new ProductOutboxEvent(product.getId()));
+    }
+    ```
+
+    A separate relay process then polls the outbox table and publishes each unpublished row to the broker, retrying until it receives an acknowledgment. Because the relay only marks a row as published after a successful broker acknowledgment, the pattern guarantees **at-least-once delivery**.
+
+    **Key properties:**
+    - The business record and the outbox event are always written together or not at all.
+    - The relay is idempotent — consumers must handle duplicate events gracefully (idempotent consumers).
+    - The relay can be implemented using polling or CDC (reading the outbox table via the transaction log).
+
+    <Warning>
+      The outbox table grows continuously. Define a cleanup job that archives or deletes processed rows, or the table will degrade query performance over time.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is event sourcing and what are its trade-offs?">
+    **Event sourcing** is an architecture pattern where the system persists every state-changing operation as an immutable event, rather than storing only the current state of an entity.
+
+    **Traditional state storage vs event sourcing**
+
+    Consider a chess application:
+    - *Traditional*: Store the current board state as a snapshot — each square holds its piece or is empty.
+    - *Event sourcing*: Store a log of moves — "black pawn moved to a1", "white knight moved to c3". To know the board's current state, replay all moves from the beginning.
+
+    **Advantages:**
+
+    - **Full audit trail** — every change is recorded. Reconstructing the state at any point in time is straightforward by replaying events up to that timestamp.
+    - **Reproducibility** — bugs can be reproduced exactly by replaying the event sequence that triggered them.
+    - **Business logic flexibility** — if business rules change (e.g., a new scoring system), you can re-process the historical event log under the new rules without losing any data.
+    - **Natural CQRS fit** — the event log is the write model; read models (projections) are built by subscribing to events and materializing them into query-optimized views.
+
+    **Disadvantages:**
+
+    - **Read performance** — fetching the current state requires replaying potentially thousands of events. Snapshots (periodically stored checkpoints) mitigate this but add complexity.
+    - **Storage growth** — events are append-only and never deleted, so the store grows indefinitely. Large event stores require careful capacity planning.
+    - **Schema evolution** — changing the structure of past events without breaking replay logic is a significant operational challenge.
+
+    ```
+    Event store (append-only):
+    [OrderPlaced] → [ItemAdded] → [ItemAdded] → [OrderConfirmed] → [PaymentReceived]
+                                                                           ↑
+                                                            Replay to here for current state
+    ```
+
+    <Note>
+      Event sourcing is often paired with CQRS. The command side appends events; the query side maintains projections (read models) derived from those events. Separating these concerns allows each side to be optimized independently.
+    </Note>
+  </Accordion>
+</AccordionGroup>

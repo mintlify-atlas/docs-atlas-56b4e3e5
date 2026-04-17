@@ -1,0 +1,340 @@
+---
+title: 'Query optimization: indexes, N+1, paging, and pooling'
+description: 'Database query performance topics from the Maeil Mail archive: N+1 problem, B+Tree indexes, connection pools, paging queries, fetch join pitfalls, and more.'
+---
+
+Writing a query that works is not the same as writing a query that performs. Many backend performance problems in production trace back to a small set of well-understood issues: N+1 queries from lazy loading, full table scans from missing or misused indexes, slow deep pagination, and connection pool misconfiguration. This section covers each of these, drawing directly from the Maeil Mail interview questions.
+
+<AccordionGroup>
+  <Accordion title="What is the N+1 problem and how do you fix it?">
+    The N+1 problem occurs when fetching a collection of entities and then accessing an association on each element triggers one additional SQL query per element. If you load 100 posts and each post has a comments collection, you end up with 1 query for the posts and 100 queries for the comments — 101 queries total instead of 1 or 2.
+
+    **Why it happens with EAGER loading:** Spring Data JPA's `findAll()` generates `SELECT u FROM User u` as JPQL. JPQL does not consider fetch type; it only loads what the query explicitly requests. After the query runs, JPA sees that related entities are mapped as `EAGER` and fires a separate query for each one.
+
+    **Why it happens with LAZY loading:** the initial `findAll()` does not trigger extra queries, because associations are replaced with proxy objects. But as soon as you access a proxied field (e.g., iterating over `user.getPosts()`), JPA fires a query to initialize that proxy — once per entity.
+
+    **Solution 1: fetch join (JPQL)**
+
+    A fetch join loads the association in the same query using a SQL JOIN:
+
+    ```sql Fetch join JPQL
+    SELECT DISTINCT u
+    FROM User u
+    LEFT JOIN FETCH u.posts
+    ```
+
+    This retrieves users and their posts in a single query. The `DISTINCT` prevents duplicate `User` objects when a user has multiple posts.
+
+    **Solution 2: `@EntityGraph`**
+
+    `@EntityGraph` applies fetch-join semantics to a repository method without writing JPQL:
+
+    ```java @EntityGraph on a repository method
+    @EntityGraph(attributePaths = {"posts"}, type = EntityGraphType.FETCH)
+    List<User> findAll();
+    ```
+
+    Both solutions produce a single JOIN query instead of N+1 individual queries.
+
+    <Warning>
+      Fetch joins on `@OneToMany` or `@ManyToMany` associations can cause problems when combined with pagination — Hibernate loads all data into memory and paginates there. See the "JPA fetch join with paging" question below.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How do database indexes work, and what are the MySQL scan types?">
+    An index is a separate data structure that the database maintains alongside a table to speed up lookups. Think of it like the index at the back of a book: instead of scanning every page to find a topic, you look it up in the index and jump directly to the right pages. The trade-off is that INSERT, UPDATE, and DELETE operations must also update the index, adding overhead to writes.
+
+    **B+Tree structure (MySQL InnoDB)**
+
+    InnoDB uses a B+Tree (a variant of the B-Tree) for most indexes. A B-Tree has three node types:
+    - **Root node:** a single node at the top of the tree
+    - **Branch nodes:** intermediate nodes that route searches
+    - **Leaf nodes:** the lowest level, holding the actual index values
+
+    In InnoDB:
+    - The **primary index (clustered index)** stores the full row data in its leaf nodes. Rows are physically ordered by primary key.
+    - **Secondary indexes** store the indexed column value and the corresponding primary key in their leaf nodes. Looking up a row by a secondary index requires two B+Tree traversals: one to find the PK, and one on the primary index to get the row.
+
+    **Three scan modes**
+
+    `Index range scan` — the fastest. Used when the query specifies a range that can be looked up in the index (e.g., `WHERE id BETWEEN 10 AND 20`). The engine locates the first matching leaf node and scans forward.
+
+    `Index full scan` — reads every entry in the index from start to end. Used when the query cannot use the index leading column (e.g., an index on `(A, B, C)` but the query filters on `B` only). Slower than range scan but faster than a full table scan when the rows themselves are not needed.
+
+    `Loose index scan` — skips non-matching entries rather than scanning linearly. Primarily used for `GROUP BY`, `MIN()`, and `MAX()` optimizations.
+
+    <Note>
+      When a query must read more than about 20–25% of the table's rows via a secondary index, the optimizer may decide that a full table scan (sequential I/O) is cheaper than many random I/O reads through the index. This is why low-selectivity columns (like boolean flags) often do not benefit from an index.
+    </Note>
+
+    **When indexes hurt:** every indexed column adds overhead to write operations because the index must be updated on every INSERT, UPDATE, and DELETE. Avoid indexing columns that are written far more often than they are read, and columns with very low cardinality (few distinct values).
+  </Accordion>
+
+  <Accordion title="What is a connection pool and how should you size it?">
+    Every time your application needs to communicate with the database, it needs a TCP connection. The lifecycle of a raw connection is expensive:
+
+    1. Load the JDBC driver
+    2. Establish a TCP socket to the database server
+    3. Authenticate
+    4. Send queries / read results
+    5. Close the connection
+    6. Close the socket
+
+    If your application opens a new connection for every request and closes it when done, steps 1–3 and 5–6 are repeated for every database interaction. Under any meaningful load, this overhead dominates the total response time.
+
+    A **connection pool** pre-creates a set of connections and keeps them alive. When your application needs the database, it borrows a connection from the pool, uses it, and returns it. The expensive setup and teardown happen once, at startup (or lazily, on first use).
+
+    The pool has key configuration parameters:
+    - **Initial pool size:** connections created at startup
+    - **Minimum pool size:** floor — the pool will not shrink below this
+    - **Maximum pool size:** ceiling — no more than this many connections will be open simultaneously
+    - **Connection timeout:** how long to wait for a connection before throwing an error
+
+    **Is a larger pool always better?**
+
+    No. The entity that uses a connection is a thread. If the pool is larger than the thread pool, the excess connections sit idle and waste resources. If the pool is smaller than the thread pool, threads queue for a connection and request latency increases.
+
+    Even if pool and thread sizes are balanced, setting both too large wastes CPU and memory on both the application server and the database server. Databases have a maximum number of concurrent connections they can handle efficiently; exceeding it degrades performance for everyone.
+
+    ```yaml HikariCP configuration example
+    spring:
+      datasource:
+        hikari:
+          maximum-pool-size: 20
+          minimum-idle: 5
+          connection-timeout: 30000  # 30 seconds
+          idle-timeout: 600000       # 10 minutes
+    ```
+
+    <Tip>
+      HikariCP (the default pool in Spring Boot) recommends a formula for maximum pool size: `(core_count * 2) + effective_spindle_count`. For a typical application on a 4-core machine with SSDs, a pool of 10–20 is a good starting point. Benchmark with realistic load rather than guessing.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are the problems with LIMIT/OFFSET paging and how do you solve them?">
+    The standard SQL approach to pagination uses `LIMIT` (how many rows) and `OFFSET` (how many rows to skip):
+
+    ```sql Standard LIMIT/OFFSET paging
+    SELECT *
+    FROM subscribe
+    LIMIT 500
+    OFFSET 0;
+    ```
+
+    This works fine for the first few pages, but **performance degrades as OFFSET grows.** The database must scan and discard all `OFFSET` rows before it can return the `LIMIT` rows you actually want. On page 1000 with a page size of 500, the database reads and throws away 500,000 rows before returning 500.
+
+    **Keyset pagination (cursor-based paging)** eliminates OFFSET by using the last row of the previous page as the starting point for the next.
+
+    Given a `subscribe` table:
+
+    ```sql Table definition
+    CREATE TABLE subscribe (
+        id          INT NOT NULL AUTO_INCREMENT,
+        deleted_at  DATETIME NULL,
+        created_at  DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY idx_deleted_at_id (deleted_at, id)
+    );
+    ```
+
+    First page query (no cursor yet):
+
+    ```sql First page — no offset
+    SELECT *
+    FROM subscribe
+    WHERE deleted_at >= ? AND deleted_at < ?
+    ORDER BY deleted_at, id
+    LIMIT 10;
+    ```
+
+    Subsequent page query (using the last row's values as the cursor):
+
+    ```sql Next page — using the last row as a cursor
+    SELECT *
+    FROM subscribe
+    WHERE
+        -- Handle ties on deleted_at
+        (deleted_at = '2024-01-01 00:00:00' AND id > 78)
+        OR
+        -- All rows after the last deleted_at value
+        (deleted_at > '2024-01-01 00:00:00' AND deleted_at < ?)
+    ORDER BY deleted_at, id
+    LIMIT 10;
+    ```
+
+    With the composite index `(deleted_at, id)`, this query uses an index range scan regardless of how deep into the dataset you are — performance is consistent across all pages.
+
+    **Trade-offs of keyset pagination:**
+    - Cannot jump to an arbitrary page number (no "go to page 50")
+    - The query shape is slightly more complex for composite sort keys
+    - Works best when the sort column(s) have an index
+
+    <Tip>
+      Keyset pagination is also called "seek method" or "no-offset pagination". It is the correct choice for infinite scroll, feed-style UIs, and batch processing jobs that iterate over large tables.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Why does JPA fetch join with paging cause an OutOfMemoryError?">
+    Using a fetch join together with `Pageable` on a `@OneToMany` or `@ManyToMany` association is dangerous. Hibernate issues a warning and silently loads all data into memory before paginating.
+
+    Consider a `Product` with a `@OneToMany` `categories` collection:
+
+    ```java Problematic: fetch join + paging on a collection
+    interface ProductJpaRepository extends JpaRepository<Product, Long> {
+
+        @Query("""
+            SELECT p
+            FROM Product p
+            JOIN FETCH p.categories pc
+            JOIN FETCH pc.category c
+            ORDER BY p.id DESC
+        """)
+        Slice<Product> findProductWithSlice(Pageable pageable);
+    }
+    ```
+
+    **What actually happens:**
+
+    1. The JOIN between `Product` and `ProductCategory` produces a cartesian product: if each product has 3 categories, the result set has 3× as many rows as there are products.
+    2. Hibernate cannot apply `LIMIT/OFFSET` to this expanded result set and still return the correct number of *products* (as opposed to the correct number of *product-category rows*).
+    3. Hibernate logs `firstResult/maxResults specified with collection fetch; applying in memory` and removes the `LIMIT` clause from the SQL.
+    4. All rows are fetched from the database into memory. With a large dataset, this causes an `OutOfMemoryError`.
+
+    The generated SQL will not contain a `LIMIT` clause:
+
+    ```sql What Hibernate actually runs (no LIMIT)
+    SELECT p.id, pc.product_id, pc.id, c.id, c.name
+    FROM product p
+    JOIN product_category pc ON p.id = pc.product_id
+    JOIN category c ON c.id = pc.category_id
+    ORDER BY p.id DESC
+    ```
+
+    **Solution: remove the fetch join and use `@BatchSize`**
+
+    ```java Safe approach: paging without fetch join
+    interface ProductJpaRepository extends JpaRepository<Product, Long> {
+
+        // No fetch join — paging works correctly
+        Slice<Product> findAll(Pageable pageable);
+    }
+
+    @Entity
+    class Product {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        @BatchSize(size = 10)   // batch-loads categories with IN clause
+        @OneToMany(mappedBy = "product", cascade = CascadeType.PERSIST)
+        private List<ProductCategory> categories = new ArrayList<>();
+    }
+    ```
+
+    `@BatchSize(size = 10)` causes Hibernate to load categories using a single `IN` query with up to 10 product IDs at a time:
+
+    ```sql Batch-size query
+    SELECT pc.product_id, pc.id, pc.category_id
+    FROM product_category pc
+    WHERE pc.product_id IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ```
+
+    This trades N+1 queries for a small number of batched IN queries, without the OOM risk.
+
+    <Warning>
+      You can also configure `spring.jpa.properties.hibernate.default_batch_fetch_size` globally to apply batch loading to all collections without annotating each one individually.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the problems with NOT IN queries and what are the alternatives?">
+    `NOT IN` is intuitive to write but problematic at scale:
+
+    ```sql Problematic NOT IN query
+    SELECT p
+    FROM Post p
+    WHERE p.id NOT IN :postIds
+    ```
+
+    **Four problems with `NOT IN`:**
+
+    1. **Full scan required:** because `NOT IN` is a negation, the database optimizer cannot use an index range scan to find matching rows. It must scan the entire table and filter out the excluded rows.
+
+    2. **Poor index utilization:** `IN` can use an index range scan (finding the matching values in the index tree). `NOT IN` cannot — it requires reading all rows and applying the exclusion filter afterward.
+
+    3. **Parsing overhead:** a large IN list means the query plan must be generated for a complex predicate. Each element in the list increases planning time.
+
+    4. **NULL semantics produce empty results:** `column NOT IN (1, 2, NULL)` always returns an empty result set, because SQL's three-valued logic means that `column != NULL` evaluates to `UNKNOWN`, which is treated as false. This catches many developers off guard.
+
+    **Alternative 1: `NOT EXISTS`**
+
+    ```sql NOT EXISTS alternative
+    SELECT p FROM Post p
+    WHERE NOT EXISTS (
+        SELECT 1 FROM Post temp
+        WHERE temp.id = p.id AND temp.id IN :postIds
+    )
+    ```
+
+    `NOT EXISTS` stops evaluating as soon as it finds a match (short-circuit evaluation). The database can use the primary key index on the subquery. For large datasets, this is typically the most stable and scalable approach.
+
+    **Alternative 2: `LEFT JOIN ... IS NULL`**
+
+    ```sql LEFT JOIN with IS NULL
+    SELECT p FROM Post p
+    LEFT JOIN (
+        SELECT temp.id FROM Post temp WHERE temp.id IN :postIds
+    ) filtered ON p.id = filtered.id
+    WHERE filtered.id IS NULL
+    ```
+
+    When the subquery result set is small, this approach is particularly efficient because the JOIN can use the primary key index. It expresses "rows in `Post` that have no match in the filtered set."
+
+    <Note>
+      The best choice between `NOT EXISTS` and `LEFT JOIN ... IS NULL` depends on your database version and the size of the exclusion list. Benchmark both with `EXPLAIN` on your actual data distribution.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between Statement and PreparedStatement?">
+    Both are JDBC interfaces for executing SQL, but they differ in how they handle SQL text and parameters.
+
+    **`Statement`** concatenates values directly into the SQL string:
+
+    ```java Statement example
+    Statement stmt = conn.createStatement();
+    ResultSet rs = stmt.executeQuery("SELECT * FROM users WHERE age > 30");
+    ```
+
+    If the value `30` comes from user input and is concatenated without sanitization:
+
+    ```java SQL injection vulnerability
+    String sql = "SELECT * FROM users WHERE name = '" + userInput + "'";
+    Statement stmt = conn.createStatement();
+    // userInput = "' OR '1'='1" → returns all rows
+    ```
+
+    **`PreparedStatement`** uses placeholders (`?`) and binds values separately:
+
+    ```java PreparedStatement example
+    String sql = "SELECT * FROM users WHERE age > ?";
+    PreparedStatement pstmt = conn.prepareStatement(sql);
+    pstmt.setInt(1, 30);
+    ResultSet rs = pstmt.executeQuery();
+    ```
+
+    Values are escaped internally by the driver before being sent to the database. A malicious string in the parameter cannot escape the string literal and inject additional SQL.
+
+    **Performance advantage of `PreparedStatement`:** the database parses and compiles the SQL structure once, then caches the execution plan. Subsequent executions with different parameter values reuse the cached plan. With `Statement`, the full SQL string (including values) changes on every call, so the database must re-parse and re-optimize each time.
+
+    | | Statement | PreparedStatement |
+    | --- | --- | --- |
+    | SQL injection protection | No | Yes (parameter escaping) |
+    | Execution plan caching | No | Yes |
+    | Dynamic parameters | String concatenation | Placeholder binding |
+    | Typical use | Static queries (rare) | All parameterized queries |
+
+    <Tip>
+      Spring's `JdbcTemplate` and JPA both use `PreparedStatement` under the hood. You rarely write JDBC directly in a Spring application, but understanding this distinction is important for security and performance interviews.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

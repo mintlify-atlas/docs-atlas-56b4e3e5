@@ -1,0 +1,311 @@
+---
+title: 'TypeScript Type System: Interview Q&A Archive'
+description: 'TypeScript interview Q&A: type vs interface, type assertion, infer keyword, never vs unknown, the satisfies operator, and how JSX transforms to JS.'
+---
+
+TypeScript has become a cornerstone of modern frontend development, and a solid understanding of its type system is consistently tested in technical interviews. This page compiles real interview questions and model answers covering the core concepts you are most likely to encounter, from the basics of static typing to advanced utility patterns.
+
+<AccordionGroup>
+  <Accordion title="Why use TypeScript? When would plain JavaScript be a better choice?">
+    TypeScript offers three main advantages over JavaScript:
+
+    1. **Static type checking** catches bugs at compile time before code ever runs. This is especially valuable on large codebases where runtime surprises are costly.
+    2. **Developer productivity** — IDE autocompletion and IntelliSense become much richer when types are known, and explicit type annotations serve as living documentation.
+    3. **OOP features** — interfaces, generics, and enums bring structure to JavaScript that would otherwise need to be enforced by convention alone.
+
+    <Note>
+      TypeScript is not always the right call. For small prototypes, simple landing pages, or teams with no TypeScript experience and tight deadlines, the setup overhead and learning curve can hurt delivery speed more than the type safety helps. The same applies when migrating an enormous existing JS codebase — the cost may outweigh the benefit unless done incrementally.
+    </Note>
+
+    When proposing adoption to a skeptical team, lead with concrete evidence: reduced runtime errors in similar projects, faster onboarding via typed APIs, and a gradual rollout plan (e.g., introduce TypeScript only in new modules first).
+  </Accordion>
+
+  <Accordion title="What is the difference between type and interface?">
+    Both `type` and `interface` can describe the shape of an object, but they differ in important ways.
+
+    **`interface`** supports *declaration merging* — declaring the same interface name twice automatically merges the two declarations into one:
+
+    ```typescript
+    interface Person {
+      age: number;
+      name: string;
+      isBirthday: boolean;
+    }
+
+    interface Person {
+      address: string;
+    }
+
+    // Valid: all four properties are required
+    const person1: Person = {
+      age: 1,
+      name: "abcd",
+      isBirthday: false,
+      address: "1010",
+    };
+    ```
+
+    This makes `interface` the preferred choice for extending object shapes, particularly when building library types that consumers may need to augment.
+
+    **`type`** does not support re-declaration (a duplicate name is a compile error), but it handles *complex type compositions* that `interface` cannot express:
+
+    ```typescript
+    type BasicInfo = {
+      name: string;
+      age: number;
+    };
+
+    type ContactInfo = {
+      email: string;
+      phone: string;
+    };
+
+    // Intersection type — combines both shapes into one
+    type PersonInfo = BasicInfo & ContactInfo;
+
+    const person2: PersonInfo = {
+      name: "John",
+      age: 30,
+      email: "john@example.com",
+      phone: "123-456-7890",
+    };
+    ```
+
+    `type` also supports union types (`A | B`), tuple types, and mapped types — capabilities that `interface` lacks.
+
+    <Tip>
+      A common convention: use `interface` for public API shapes that might be extended, and `type` for everything else (unions, intersections, utility compositions).
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is type assertion, and when should you use it?">
+    Type assertion tells the TypeScript compiler "trust me, I know better than you what type this value is." You write it with the `as` keyword, which overwrites the compiler's inferred type.
+
+    A typical use case is DOM element access. `document.getElementById()` returns `HTMLElement | null`, but if you know the element is a `<div>`, you can assert that:
+
+    ```typescript
+    const element = document.getElementById("myElement") as HTMLDivElement;
+    element.style.backgroundColor = "blue";
+    ```
+
+    **When it is appropriate:** you have information the compiler lacks — for example, you know an external API always returns a specific shape, or you are narrowing from a very broad union.
+
+    **The key risk:** type assertion bypasses type checking entirely. If the runtime value differs from what you asserted, you will get a runtime error — not a compile error. That defeats the purpose of TypeScript.
+
+    **Safer alternatives to prefer:**
+
+    *Type narrowing via control flow:*
+    ```typescript
+    function printLength(value: string | string[]) {
+      if (Array.isArray(value)) {
+        console.log(value.length); // TypeScript knows this is string[]
+      } else {
+        console.log(value.length); // TypeScript knows this is string
+      }
+    }
+    ```
+
+    *Type predicates (custom type guards):*
+    ```typescript
+    function isFish(pet: Fish | Bird): pet is Fish {
+      return (pet as Fish).swim !== undefined;
+    }
+
+    if (isFish(pet)) {
+      pet.swim(); // safely typed as Fish here
+    }
+    ```
+
+    *Asserting only at the narrowest scope:*
+    ```typescript
+    const element = document.getElementById("myElement");
+    if (element) {
+      (element as HTMLDivElement).style.backgroundColor = "blue";
+    }
+    ```
+
+    <Warning>
+      Avoid chaining `as unknown as SomeType` just to force a type through. If you find yourself doing that, it is a strong signal your data model or function signature needs redesigning.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What does the infer keyword do in TypeScript?">
+    `infer` lets you *extract* a type from within a conditional type rather than having to name it yourself. It only works inside the `extends` clause of a conditional type.
+
+    The canonical example is extracting a function's return type:
+
+    ```typescript
+    type GetReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+
+    type ReturnType = GetReturnType<() => string>; // string
+    ```
+
+    Here, `infer R` tells TypeScript: "whatever type comes after the `=>` in this function signature, call it `R` and make it available on the true branch." If `T` is not a function, the condition is false and the type resolves to `never`.
+
+    The `extends` keyword itself serves two related purposes in TypeScript:
+
+    1. **Generic constraint** — limits what types a type parameter can accept:
+       ```typescript
+       type Example<T extends string> = T; // T must be assignable to string
+       ```
+
+    2. **Conditional check** — tests whether a type satisfies a condition:
+       ```typescript
+       type Check<T> = T extends string ? 'string' : 'other';
+
+       type A = Check<'hello'>; // 'string'
+       type B = Check<42>;      // 'other'
+       ```
+
+    <Note>
+      `infer` cannot be used outside a conditional type. Attempting `type X = infer R` at the top level is a syntax error.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between never and unknown?">
+    These two types sit at opposite ends of the TypeScript type hierarchy.
+
+    **`never` — the bottom type**
+
+    `never` represents a value that *can never exist*. It is assigned to:
+    - Functions that always throw and never return
+    - Functions that run infinite loops
+    - Branches that the type system proves are unreachable
+
+    ```typescript
+    function throwError(message: string): never {
+      throw new Error(message);
+    }
+    ```
+
+    Because `never` is a subtype of every type, it can be assigned to anything — but nothing can be assigned to it. This makes it useful for exhaustive checks in `switch` statements.
+
+    **`unknown` — the top type**
+
+    `unknown` represents a value whose type is not yet known. It is the type-safe counterpart of `any`. Unlike `any`, you cannot use an `unknown` value directly — you must first narrow it:
+
+    ```typescript
+    function processUnknownValue(value: unknown) {
+      if (typeof value === 'string') {
+        console.log(value.toUpperCase()); // safe
+      } else if (typeof value === 'number') {
+        console.log(value.toFixed(2));    // safe
+      }
+    }
+    ```
+
+    **Comparison with `void`**
+
+    `void` means a function *completes normally but returns no meaningful value* (a `return;` statement is allowed). `never` means a function *cannot complete* — it either throws unconditionally or loops forever.
+
+    | Type | Meaning | Assignable to | Assignable from |
+    |---|---|---|---|
+    | `never` | Impossible value | Any type | Nothing |
+    | `unknown` | Unknown value | Only `unknown` or `any` | Any type |
+    | `void` | No return value | Only `void` or `undefined` | `undefined` |
+  </Accordion>
+
+  <Accordion title="What is the difference between dynamic typing and static typing?">
+    The distinction determines *when* type information is resolved.
+
+    **Dynamic typing** resolves types at runtime. A variable can hold any type at any time, and type errors surface only when the code executes:
+
+    ```javascript
+    let value = 10;     // number
+    value = "Hello";    // now a string — no error at write time
+    ```
+
+    JavaScript, Python, and Ruby are dynamically typed. This allows rapid iteration but makes bugs harder to catch early, especially in large codebases.
+
+    **Static typing** resolves types at compile time. Every variable must have a declared (or inferred) type, and mismatches are reported before the code runs:
+
+    ```typescript
+    let value: number = 10;
+    value = "Hello"; // ⚠️ Compile error: Type 'string' is not assignable to type 'number'
+    ```
+
+    Java, C, and TypeScript are statically typed. The trade-off is more upfront ceremony, but you gain early error detection, better tooling (autocompletion, refactoring), and self-documenting code.
+
+    Neither is universally superior — the choice depends on project scale, team experience, and how quickly the codebase evolves. Fast prototypes and small scripts often benefit from dynamic typing's flexibility; large, long-lived systems typically benefit from static typing's safety net.
+  </Accordion>
+
+  <Accordion title="What does the satisfies keyword do in TypeScript?">
+    Introduced in TypeScript 4.9, `satisfies` lets you *validate* that a value conforms to a type while still retaining the value's *most specific inferred type*.
+
+    **The problem it solves**
+
+    When you annotate a variable with a wide union type, TypeScript widens the inferred type to match the annotation, losing precision:
+
+    ```typescript
+    type Color = "red" | "green" | "blue";
+    type RGB = [red: number, green: number, blue: number];
+
+    const palette: Record<Color, string | RGB> = {
+      red: [255, 0, 0],
+      green: "#00ff00",
+      blue: [0, 0, 255]
+    };
+
+    // ⚠️ Error: palette.green is typed as string | RGB, not string
+    const greenNormalized = palette.green.toUpperCase();
+    ```
+
+    **The satisfies solution**
+
+    ```typescript
+    const palette = {
+      red: [255, 0, 0],
+      green: "#00ff00",
+      blue: [0, 0, 255]
+    } satisfies Record<Color, string | RGB>;
+
+    // ✅ Works: palette.green is inferred as string
+    const greenNormalized = palette.green.toUpperCase();
+    ```
+
+    The value is still checked against `Record<Color, string | RGB>` (so typos in color names are caught), but the inferred type of each property remains as specific as possible.
+
+    **When to reach for it**
+    - Validating that an object literal satisfies a contract while keeping narrow property types
+    - Union-typed config objects where you need per-key type narrowing downstream
+    - Replacing `as const` + explicit annotation patterns that previously required a cast
+  </Accordion>
+
+  <Accordion title="What is JSX and how does it transform into JavaScript?">
+    JSX (JavaScript XML) is a syntax extension for JavaScript that lets you write HTML-like markup directly inside `.jsx` or `.tsx` files. Browsers cannot execute JSX natively — it must be compiled to plain JavaScript first.
+
+    **What JSX looks like**
+
+    ```jsx
+    const element = (
+      <h1 className="greeting">
+        Hello, JSX!
+      </h1>
+    );
+    ```
+
+    **What it compiles to (classic transform)**
+
+    A transpiler like Babel rewrites each JSX element into a `React.createElement()` call:
+
+    ```javascript
+    const element = React.createElement(
+      'h1',
+      { className: 'greeting' },
+      'Hello, world!'
+    );
+    ```
+
+    `React.createElement()` returns a lightweight plain object (a virtual DOM node) that React uses to build its internal tree and diff against the previous render.
+
+    **Common follow-up questions**
+
+    *Is JSX React-specific?* No. JSX is just a syntax transform. Any library that provides a compatible factory function can use it — Preact, Solid, and Vue 3's JSX support are examples.
+
+    *Why must JSX return a single root element?* A JSX expression compiles to a single function call returning a single object. Returning two sibling JSX elements would mean returning two objects from one expression, which is illegal in JavaScript. Wrapping them in a `<>...</>` Fragment produces a single container object.
+
+    <Note>
+      React 17+ introduced a new JSX transform that imports the factory function automatically, removing the need for `import React from 'react'` at the top of every file that uses JSX.
+    </Note>
+  </Accordion>
+</AccordionGroup>

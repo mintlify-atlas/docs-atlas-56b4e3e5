@@ -1,0 +1,178 @@
+---
+title: "Proxies, Load Balancing, and Reliability Patterns"
+description: "Interview Q&A on forward vs reverse proxies, load balancing algorithms, scale-out vs scale-up, SPOF, and handling external service failures."
+---
+
+Designing systems that stay available under load and degrade gracefully under failure is a core backend engineering skill. This page draws from the Maeil Mail archive to cover the infrastructure building blocks most commonly discussed in interviews: proxy types, load balancing algorithms, horizontal versus vertical scaling, single points of failure, and patterns for isolating external dependencies.
+
+<AccordionGroup>
+
+  <Accordion title="What is the difference between a forward proxy and a reverse proxy?">
+    Both are intermediary servers that sit between two communicating parties, but they serve opposite sides of the conversation.
+
+    **Forward proxy** sits in front of **clients**. When a user inside a corporate network requests an external website, the request goes to the forward proxy first, which forwards it on the user's behalf. The origin server sees the proxy's IP, not the client's.
+
+    Key uses:
+    - **Anonymity** — hides the client's real IP address.
+    - **Access control** — blocks requests to malicious or off-limits sites.
+    - **Caching** — stores frequently accessed responses so repeated requests avoid the round-trip to the origin.
+
+    **Reverse proxy** sits in front of **servers**. External clients send requests to the reverse proxy, which routes them to one of the backend servers. Clients never communicate directly with backend servers.
+
+    Key uses:
+    - **Load balancing** — distributes traffic across multiple backend instances.
+    - **DDoS / attack mitigation** — absorbs or filters malicious traffic before it reaches the application.
+    - **SSL/TLS termination** — handles HTTPS decryption centrally, reducing per-server overhead and simplifying certificate management.
+    - **Caching and compression** — serves cached static assets and compresses responses closer to the client.
+
+    <Note>
+      Nginx is commonly used as both a forward proxy (for internal networks) and a reverse proxy (as a frontend for application servers). The role is determined by configuration, not the software itself.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is load balancing and what algorithms are commonly used?">
+    **Load balancing** distributes incoming network traffic across a pool of backend servers to prevent any single server from becoming a bottleneck. A load balancer sits in front of the server pool, receiving client requests and forwarding each to a chosen backend.
+
+    Benefits: improved availability, horizontal scalability, and the ability to perform rolling deployments and health-check-based failover.
+
+    **Common algorithms:**
+
+    **Round Robin**
+    Requests are distributed in sequence: server A, B, C, A, B, C, …
+    - Best when all servers have equal capacity and request processing time is uniform.
+    - Ignores server load or response time.
+
+    **Weighted Round Robin**
+    Each server is assigned a weight proportional to its capacity. A server with weight 3 receives three times as many requests as a server with weight 1.
+    - Useful when servers have different hardware specs.
+    - Still does not account for instantaneous server load.
+
+    **Least Connections**
+    Sends each new request to the server with the fewest active connections.
+    - Good when request processing times vary widely (long-lived connections would overload a round-robin target).
+    - Less effective if servers have very different capacities (a more powerful server can handle many more concurrent connections).
+
+    **Weighted Least Connections**
+    Combines Least Connections with per-server weights to account for heterogeneous hardware.
+
+    **Least Response Time**
+    Routes requests to the server with the lowest measured response time.
+    - Maximises user-perceived performance.
+    - May overload a temporarily fast server; does not consider active connection count.
+
+    **IP Hash**
+    Hashes the client's IP address to deterministically select a server. The same client always reaches the same server.
+    - Maintains **session affinity** (useful when session state is stored in server memory).
+    - Can cause uneven distribution if client IPs cluster (e.g., many users behind the same NAT gateway).
+
+    <Tip>
+      IP hash achieves a similar result to sticky sessions but at the load-balancer level rather than through cookie tracking. It is simpler but less flexible — changing the server pool can re-hash clients to different servers.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between scale-up and scale-out?">
+    When a server reaches its capacity limits you have two fundamental options for increasing throughput.
+
+    **Scale-up (vertical scaling)** upgrades the existing server to a more powerful machine — more CPU cores, more RAM, faster storage. For example, upgrading an AWS EC2 instance from `t2.micro` to `t2.large`.
+
+    | Aspect | Scale-up |
+    |--------|----------|
+    | Simplicity | High — no architectural changes needed |
+    | Upper bound | Hard limit (biggest available instance) |
+    | Availability | No redundancy; one server going down = full outage |
+    | Cost model | Often pays for peak capacity even during quiet periods |
+
+    **Scale-out (horizontal scaling)** adds more servers of similar spec and distributes requests across them with a load balancer.
+
+    | Aspect | Scale-out |
+    |--------|-----------|
+    | Simplicity | Lower — requires load balancing, session handling, distributed coordination |
+    | Upper bound | Practically unlimited (keep adding nodes) |
+    | Availability | High — one server failing does not take down the service |
+    | Cost model | Pay only for what you use; auto-scaling adds/removes nodes on demand |
+
+    **Trade-offs in practice:**
+    Scale-up is often the right first move because it requires no application changes. Scale-out becomes necessary once you hit the vertical ceiling, need high availability, or want cost-efficient auto-scaling. Many production systems combine both: each individual node is right-sized (modest scale-up), and capacity grows horizontally.
+
+    <Warning>
+      Scaling out introduces new complexities: session consistency across nodes, distributed locking for shared resources, and coordinated deployments. Evaluate these before committing to a stateful application design.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is a Single Point of Failure (SPOF) and how do you eliminate one?">
+    A **Single Point of Failure (SPOF)** is any component whose failure causes the entire system to become unavailable. Identifying and eliminating SPOFs is the foundation of high-availability (HA) design — systems that maintain **99.9%+ uptime** (often expressed as "nines").
+
+    **Availability formula:**
+    ```
+    Availability = Uptime / (Uptime + Downtime)
+    ```
+
+    **Example scenario:**
+    ```
+    - 1 API server
+    - 1 Master DB + 3 Replica DBs (failover supported)
+    ```
+
+    The single API server is a clear SPOF. Any OOM crash, hardware failure, or network partition takes down the entire service.
+
+    **Remediation — eliminate the API server SPOF:**
+    1. Deploy multiple API server instances.
+    2. Place a load balancer in front of them.
+    3. If a server fails, the load balancer detects it via health checks and stops routing traffic to it.
+
+    **Checklist when moving to a multi-server setup:**
+
+    - **Concurrency** — Java's `synchronized` or `ReentrantLock` only protect within a single JVM. In a distributed environment you need distributed locks (e.g., Redis `SETNX`, database row locks).
+    - **Session consistency** — session data stored in-memory on one node is invisible to others. Use sticky sessions, session clustering, or an external session store (see the security page).
+    - **Observability** — logs and metrics are now spread across multiple hosts. Aggregate them into a centralised system (ELK, Prometheus + Grafana, etc.) to maintain visibility.
+    - **Load balancing algorithm** — choose the algorithm that matches your traffic pattern (see the load balancing question above).
+    - **Deployment** — rolling deployments, blue-green deployments, or canary releases become necessary to avoid downtime and to manage multiple running versions safely.
+
+    <Note>
+      Even after eliminating the API server SPOF, the load balancer itself can become one. Production systems run load balancers in an active-passive or active-active pair with a shared virtual IP.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How do you handle failures in an external service your application depends on?">
+    Depending on an external HTTP service introduces latency and failure risk that, if unmanaged, can cascade through your entire application.
+
+    **Step 1: Set timeouts**
+    At minimum, configure:
+    - **Connection timeout** — how long to wait for the TCP handshake to complete.
+    - **Read timeout** — how long to wait for the response body after connecting.
+    - **Connection pool timeout** — how long a thread waits to acquire a connection from the pool.
+
+    Without timeouts, threads stall indefinitely, eventually exhausting the thread pool and making the application unresponsive.
+
+    **Step 2: Apply the Bulkhead pattern**
+
+    Consider a shared HTTP connection pool used by three integrations (A, B, C):
+
+    ```
+    1. Services A, B, C share one connection pool.
+    2. Service A degrades and responses slow down.
+       → Pool connections are consumed waiting for A.
+       → Pool depletes; B and C requests queue for a free connection.
+       → B and C become slow even though they are healthy.
+    ```
+
+    The **Bulkhead pattern** isolates each integration in its own connection pool. A's degradation consumes only A's pool, leaving B's and C's pools untouched.
+
+    **Step 3: Add a Circuit Breaker**
+
+    Even with timeouts and bulkheads, constantly sending requests to a known-failing service wastes time and resources. A **circuit breaker** tracks failure rates and, once a threshold is exceeded, **opens the circuit** — subsequent calls fail immediately without attempting the network request (fast fail).
+
+    | State | Behaviour |
+    |-------|-----------|
+    | **Closed** | Requests flow normally; failures are counted. |
+    | **Open** | Requests fail immediately; no network call is made. |
+    | **Half-open** | A probe request is allowed through; if it succeeds, the circuit closes. |
+
+    Fast-failing allows the system to return a degraded response (cached data, a fallback value, or a friendly error) quickly, preventing latency from cascading into a full outage.
+
+    <Tip>
+      In the Java ecosystem, **Resilience4j** provides circuit breaker, bulkhead, retry, and rate limiter implementations with Spring Boot integration. Netflix Hystrix served a similar role but is now in maintenance mode.
+    </Tip>
+  </Accordion>
+
+</AccordionGroup>

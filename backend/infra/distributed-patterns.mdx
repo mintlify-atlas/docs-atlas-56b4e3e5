@@ -1,0 +1,165 @@
+---
+title: "Distributed Systems Patterns: CAP, CQRS, and More"
+description: "Interview questions on the CAP theorem, CQRS, eventual vs strong consistency, and single point of failure — covering distributed system design fundamentals."
+---
+
+Distributed systems trade the simplicity of a single machine for scalability and fault tolerance, but that trade introduces fundamental constraints and failure modes that every backend engineer must understand. The CAP theorem frames what is achievable; CQRS and eventual consistency are practical patterns for living within those constraints; and SPOF analysis is the operational discipline that keeps high-availability systems actually highly available. The questions below cover the distributed-systems topics that come up most often in system design and backend interviews.
+
+<AccordionGroup>
+  <Accordion title="What is the CAP theorem and what does it mean in practice?">
+    The **CAP theorem** (Brewer's theorem) states that a distributed data system can provide at most two of the following three guarantees simultaneously:
+
+    - **Consistency (C)** — every read returns the most recent write. All nodes in the cluster return the same data at any given moment, regardless of which node a client connects to.
+    - **Availability (A)** — every request receives a valid response (not an error), even if some nodes are unavailable.
+    - **Partition tolerance (P)** — the system continues to operate when network partitions occur (i.e., when nodes cannot communicate with each other).
+
+    **Why CA systems do not exist in practice**
+
+    Network partitions are inevitable in any distributed system — hardware fails, switches drop packets, data centers lose connectivity. Because you cannot eliminate partitions, you cannot sacrifice partition tolerance in a real distributed system. This leaves only two realistic choices: **CP** or **AP**.
+
+    **CP systems** — when a partition occurs, the system refuses to serve potentially stale reads or conflicting writes until the partition heals. Consistency is preserved at the cost of availability. Example: a CP database halts writes to the minority partition until it can confirm consensus with the majority.
+
+    **AP systems** — when a partition occurs, all nodes continue to accept reads and writes. Consistency is temporarily sacrificed: nodes on either side of the partition may diverge. When the partition heals, a reconciliation process restores eventual consistency. Examples include many NoSQL databases (Cassandra, CouchDB in AP mode).
+
+    **An example with three nodes:**
+
+    Suppose nodes are split into partition A (1 node) and partition B (2 nodes). A write arrives at partition A.
+    - CP behavior: partition A blocks or rejects the write because it cannot confirm quorum with B.
+    - AP behavior: partition A accepts the write locally. When the partition heals, the conflicting state between A and B must be reconciled.
+
+    <Note>
+      Modern distributed databases often let you tune the consistency level per operation rather than committing the entire system to one side of the CAP trade-off. DynamoDB's consistent read option and Cassandra's configurable quorum levels are examples of this flexibility.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is CQRS and when should you use it?">
+    **CQRS (Command Query Responsibility Segregation)** separates the model used to handle state-changing operations (commands) from the model used to answer queries (queries). Rather than using a single domain model for both reads and writes, you maintain two distinct models optimized for their respective purposes.
+
+    **Why the separation matters**
+
+    In a typical e-commerce system, write operations (place order, cancel order, apply discount) need transactional integrity and complex domain logic. Read operations (display order history, show product catalog) need fast, flexible projections that span multiple entities. A single model serves both poorly — it is either too complex for reads or too anemic for writes.
+
+    **A concrete example**
+
+    ```java
+    // Command model — rich domain object, used for writes
+    // Managed with JPA for transactional integrity
+    @Entity
+    public class Order {
+        @Id private Long id;
+        private OrderStatus status;
+        private List<OrderItem> items;
+
+        public void cancel() {
+            if (status != OrderStatus.PENDING) throw new IllegalStateException("Cannot cancel");
+            this.status = OrderStatus.CANCELLED;
+        }
+    }
+
+    // Query model — flat projection, used for reads
+    // Managed with MyBatis or JDBC for query flexibility and performance
+    public record OrderSummary(Long id, String customerName, BigDecimal total, String status) {}
+    ```
+
+    The command model uses JPA because it benefits from ORM mapping of complex relationships and transaction management. The query model uses MyBatis or plain SQL because its only job is to return flat data structures quickly.
+
+    **Trade-offs:**
+
+    | Advantage | Disadvantage |
+    |-----------|-------------|
+    | Each model is optimized for its workload | More code to write and maintain |
+    | Different storage engines per model (e.g., RDB for writes, NoSQL for reads) | Synchronization between write and read models adds complexity |
+    | Improved maintainability — changes to write logic don't affect read projections | Over-engineering risk for simple CRUD applications |
+
+    <Warning>
+      CQRS adds significant implementation overhead. Evaluate whether a single model's complexity genuinely justifies the dual-model investment. Many systems benefit from query-specific DTOs without full CQRS — a simpler intermediate step.
+    </Warning>
+
+    <Tip>
+      CQRS pairs naturally with event sourcing. The command side appends events; the query side consumes those events and maintains optimized read projections. This combination is common in high-traffic platforms that need both auditability and fast reads.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is eventual consistency and how does it differ from strong consistency?">
+    **Eventual consistency** is a consistency model used in distributed systems where high availability takes priority. After a write is accepted by one node, the change is propagated asynchronously to other nodes. During propagation, nodes may temporarily return different values for the same key. However, once propagation completes and no further updates arrive, all nodes converge to the same value.
+
+    **Strong consistency**, by contrast, guarantees that after a write completes, every subsequent read — from any node — returns the updated value. The write is not acknowledged until all (or a quorum of) nodes have confirmed the change. This eliminates stale reads but reduces availability: if nodes cannot communicate to confirm the write, the system blocks.
+
+    **A concrete replication scenario:**
+
+    ```
+    Time 0:  Client writes value "v2" to Node A
+    Time 1:  Node A acknowledges the write
+             Nodes B and C still return "v1" (stale)
+    Time 2:  Replication propagates "v2" to Node B
+    Time 3:  Replication propagates "v2" to Node C
+             All nodes now return "v2" — eventual consistency achieved
+    ```
+
+    With strong consistency, Nodes B and C would block reads between Time 0 and Time 3, or the write would not be acknowledged until all nodes confirmed.
+
+    **Comparison summary:**
+
+    | | Eventual consistency | Strong consistency |
+    |-|----------------------|--------------------|
+    | **Read availability** | High — reads always served | Lower — reads may block |
+    | **Write latency** | Low — write confirmed on one node | Higher — quorum or all nodes must confirm |
+    | **Staleness risk** | Yes — stale reads possible | No — always current |
+    | **Typical use** | DNS, shopping carts, social feeds | Financial transactions, inventory |
+
+    **Choosing a model**
+
+    Eventual consistency suits workloads where brief inconsistency is acceptable: a social media like count being off by a few for a second causes no harm. Strong consistency is mandatory where stale reads cause real damage: a bank balance read immediately after a transfer must reflect the transfer.
+
+    <Note>
+      Many databases allow you to select the consistency level per operation. Reading with strong consistency from a replica set (e.g., MongoDB's `majority` read concern) is possible but incurs latency. Profiling your read patterns and choosing consistency levels intentionally is better than applying a single setting globally.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is a Single Point of Failure (SPOF) and how do you eliminate one?">
+    A **Single Point of Failure (SPOF)** is any component in a system whose failure causes the entire system to stop working. Identifying and eliminating SPOFs is the core engineering discipline behind **high availability (HA)**.
+
+    **Availability** is measured as uptime divided by total time:
+
+    ```
+    Availability = Uptime / (Uptime + Downtime)
+    ```
+
+    Systems targeting 99.999% availability ("five nines") can tolerate only about 5 minutes of downtime per year. Achieving this requires redundancy at every level where a single failure could cascade to total outage.
+
+    **Example: identifying and fixing a SPOF**
+
+    Consider this architecture:
+    ```
+    Client → API Server (1 instance) → Master DB + 3 Replica DBs (failover supported)
+    ```
+
+    The database layer has redundancy — replicas and automatic failover protect it. But the API server is a SPOF: any OOM error, network failure, hardware fault, or application crash takes the entire service down.
+
+    **Fix:** Add a second API server and a load balancer in front of both:
+
+    ```
+    Client → Load Balancer → API Server A
+                           → API Server B
+                         → Master DB + 3 Replicas
+    ```
+
+    Now a single API server failure is absorbed by the load balancer, which routes all traffic to the healthy server.
+
+    **Checklist when redundifying a server tier:**
+
+    - **Distributed concurrency** — `synchronized` and `ReentrantLock` in Java protect shared state within a single JVM but provide no protection across multiple servers. Replace them with distributed locks (Redis `SETNX`, database-level locks) or redesign to eliminate shared mutable state.
+
+    - **Session consistency** — if the application uses server-side sessions, users routed to different servers will lose their session. Solutions: sticky sessions (affinity routing), session clustering (Spring Session with Redis), or stateless token authentication (JWT).
+
+    - **Centralized observability** — with multiple servers, logs and metrics are distributed across instances. Aggregate them into a central system (ELK Stack, Loki + Grafana) so that a single dashboard shows the full picture.
+
+    - **Load balancing algorithm** — choose an algorithm appropriate for your traffic pattern. Round-robin is simple but ignores server load. Least-connections is better when request duration varies significantly. IP hash enables sticky sessions at the network level.
+
+    - **Deployment strategy** — with multiple servers, deploying a new version requires a rolling, blue/green, or canary strategy to avoid taking all servers offline simultaneously (see the zero-downtime deployment question in the Deployment & Operations section).
+
+    <Warning>
+      Eliminating the API server SPOF exposes the next weakest link. After adding redundancy to the API tier, audit the load balancer itself, the database master node, the network topology (single availability zone?), and any shared external dependencies (a payment gateway, an SMS provider) that could become the new SPOF.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,246 @@
+---
+title: "Prototypes and OOP in JavaScript Interview Questions"
+description: "JavaScript prototype chains, constructor functions, class syntax, this binding, and memory management — real interview Q&A from the Maeil Mail archive."
+---
+
+JavaScript's object system is fundamentally different from class-based languages like Java or C++. Objects inherit directly from other objects through a **prototype chain**, and the `class` keyword introduced in ES6 is syntactic sugar over this underlying prototype mechanism. Understanding how prototypes work, when `this` is bound, and what happens when objects are passed to functions is a reliable indicator of JavaScript depth in interviews.
+
+<AccordionGroup>
+  <Accordion title="What is prototype-based inheritance and how does the prototype chain work?">
+    Every JavaScript object has an internal `[[Prototype]]` slot that either points to another object or is `null`. When you access a property on an object, the JavaScript engine first looks for it directly on the object. If it is not found, the engine follows the `[[Prototype]]` link to the next object and searches there. This process continues up the chain until the property is found or `[[Prototype]]` is `null` (the end of the chain). This connected series of prototype links is the **prototype chain**.
+
+    **Setting up prototypes with `Object.create()`**
+
+    ```javascript
+    const dog = {
+      greet() {
+        console.log('Hello from dog!');
+      }
+    };
+
+    const maru = Object.create(dog); // maru's [[Prototype]] is set to dog
+    maru.greet(); // "Hello from dog!" — found on the prototype
+    ```
+
+    When `maru.greet()` is called, the engine checks `maru` — no `greet` property. It then checks `maru`'s prototype (`dog`) — `greet` is found there, so it is called.
+
+    **Setting up prototypes with a constructor function**
+
+    ```javascript
+    function Dog() {}
+    Dog.prototype.greet = function () {
+      console.log('Hello from Dog!');
+    };
+
+    const maru = new Dog(); // maru's [[Prototype]] is set to Dog.prototype
+    maru.greet();           // "Hello from Dog!"
+    ```
+
+    All instances created with `new Dog()` share the same `Dog.prototype` object — they do not each carry their own copy of `greet`. This is the memory-efficient basis of JavaScript inheritance.
+  </Accordion>
+
+  <Accordion title="What are constructor functions and why was the class syntax introduced?">
+    **Constructor functions** are the original way to create objects from a blueprint in JavaScript. By convention they start with a capital letter and must be called with `new`.
+
+    ```javascript
+    function Person(name, age) {
+      this.name = name;
+      this.age = age;
+    }
+
+    Person.prototype.greet = function () {
+      console.log(`안녕하세요, 저는 ${this.name}입니다.`);
+    };
+
+    const person1 = new Person('Alice', 25);
+    person1.greet(); // '안녕하세요, 저는 Alice입니다.'
+    ```
+
+    When called with `new`, JavaScript automatically:
+    1. Creates a new empty object.
+    2. Sets its `[[Prototype]]` to `Person.prototype`.
+    3. Binds `this` inside the constructor to the new object.
+    4. Returns the new object.
+
+    **Why `class` was introduced**
+
+    Constructor functions have several readability and correctness problems:
+    - Inheritance through prototype chains (`Child.prototype = Object.create(Parent.prototype)`) is verbose and error-prone.
+    - If you forget `new`, the constructor runs as a plain function and pollutes the global scope.
+    - The pattern looks nothing like the OOP code that developers coming from other languages expect.
+
+    The `class` syntax resolves all of these:
+
+    ```javascript
+    class Person {
+      constructor(name, age) {
+        this.name = name;
+        this.age = age;
+      }
+
+      greet() {
+        console.log(`안녕하세요, 저는 ${this.name}입니다.`);
+      }
+    }
+
+    class Employee extends Person {
+      constructor(name, age, role) {
+        super(name, age);
+        this.role = role;
+      }
+
+      introduce() {
+        console.log(`${this.name}, ${this.role}`);
+      }
+    }
+
+    const emp = new Employee('Bob', 30, 'Engineer');
+    emp.greet();     // '안녕하세요, 저는 Bob입니다.'
+    emp.introduce(); // 'Bob, Engineer'
+    ```
+
+    <Note>
+      Under the hood, `class` still uses prototypes — `Employee.prototype` is chained to `Person.prototype`. The `class` keyword is syntactic sugar that makes the pattern more readable and adds some safety guards (e.g. calling a class without `new` throws a `TypeError`).
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does this binding work in JavaScript?">
+    `this` in JavaScript is not fixed at definition time — it is determined by **how a function is called**. There are six binding scenarios:
+
+    **1. Global call** — `this` is the global object (`window` in browsers, `global` in Node.js).
+
+    ```javascript
+    function globalFunc() {
+      console.log(this); // window / global
+    }
+    globalFunc();
+    ```
+
+    **2. Method call** — `this` is the object that owns the method.
+
+    ```javascript
+    const obj = {
+      name: 'Alice',
+      greet() { console.log(this.name); },
+    };
+    obj.greet(); // 'Alice'
+    ```
+
+    **3. Constructor / class** — `this` is the newly created instance.
+
+    ```javascript
+    function Person(name) { this.name = name; }
+    const p = new Person('Alice');
+    console.log(p.name); // 'Alice'
+    ```
+
+    **4. Explicit binding** — `call()`, `apply()`, and `bind()` let you set `this` manually.
+
+    ```javascript
+    function greet() { console.log(this.name); }
+    const user = { name: 'Alice' };
+    greet.call(user);  // 'Alice'
+    greet.apply(user); // 'Alice'
+    const boundGreet = greet.bind(user);
+    boundGreet();      // 'Alice'
+    ```
+
+    **5. Arrow functions** — arrow functions do not have their own `this`. They inherit `this` from the surrounding lexical scope.
+
+    ```javascript
+    const obj = {
+      name: 'Alice',
+      regular() {
+        setTimeout(function () { console.log(this.name); }, 100); // undefined (global this)
+      },
+      arrow() {
+        setTimeout(() => { console.log(this.name); }, 100); // 'Alice' (lexical this)
+      },
+    };
+    obj.regular();
+    obj.arrow();
+    ```
+
+    **6. DOM event handlers** — `this` refers to the element that received the event (when using a regular function, not an arrow function).
+
+    ```javascript
+    button.addEventListener('click', function () {
+      console.log(this); // the button element
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Does JavaScript pass objects by reference or by value?">
+    JavaScript is always **call-by-value** — but for objects, the value being passed is a **reference** (memory address). This is sometimes called **call-by-sharing**.
+
+    **Primitives** (`string`, `number`, `boolean`, etc.) — a copy of the actual value is passed. Changes inside the function do not affect the caller.
+
+    **Objects** — a copy of the *reference* is passed. Mutating a property through the copied reference affects the original object. But reassigning the parameter to a new object only changes the local copy; the caller's variable still points to the original.
+
+    ```javascript
+    function change(a, b, c) {
+      a = 'a changed';         // reassigns local copy — no effect outside
+      b = { b: 'changed' };    // reassigns local copy — no effect outside
+      c.c = 'changed';         // mutates the shared object — visible outside
+    }
+
+    let a = 'a unchanged';
+    let b = { b: 'unchanged' };
+    let c = { c: 'unchanged' };
+
+    change(a, b, c);
+
+    console.log(a); // 'a unchanged'
+    console.log(b); // { b: 'unchanged' }
+    console.log(c); // { c: 'changed' }  ← property mutation is visible
+    ```
+
+    This distinction matters when deciding whether to clone an object before passing it, and is key to understanding immutability patterns.
+  </Accordion>
+
+  <Accordion title="What are memory management and garbage collection in JavaScript?">
+    JavaScript handles memory automatically in two stages: **allocation** and **release**.
+
+    **Allocation**
+
+    Memory is allocated whenever a variable or object is created:
+    - **Primitive values** (numbers, strings, booleans) are stored on the **stack** — they have a known, fixed size.
+    - **Objects and arrays** (reference types) are stored on the **heap** — their size is dynamic and determined at runtime.
+
+    **Release — Garbage Collection**
+
+    The JavaScript engine tracks which allocated memory is still reachable and periodically frees the rest. Two common algorithms:
+
+    | Algorithm | How it works | Limitation |
+    |-----------|-------------|------------|
+    | **Reference-counting** | Tracks how many variables point to each object; frees memory when count reaches 0 | Cannot collect **circular references** (two objects referencing each other both have count > 0) |
+    | **Mark-and-sweep** | Starts from root objects (globals), marks everything reachable, then sweeps away unmarked objects | Handles circular references correctly; used by modern engines |
+
+    ```javascript
+    // Circular reference — reference-counting would leak this
+    function createCircle() {
+      const a = {};
+      const b = {};
+      a.ref = b; // a references b
+      b.ref = a; // b references a
+      // When the function returns, a and b are unreachable from roots
+      // Mark-and-sweep correctly collects them
+    }
+    createCircle();
+    ```
+
+    **Common memory leak causes**
+
+    1. **Event listeners not removed** — a DOM element is removed from the page, but its event listener keeps a reference alive. Fix: call `removeEventListener()`.
+    2. **Closures holding large objects** — a closure captures a reference to a large object that is no longer needed. Fix: set the variable to `null` once done.
+    3. **Excessive global variables** — globals persist for the lifetime of the application. Fix: use modules and limit global scope.
+
+    <Tip>
+      Chrome DevTools' **Memory** tab provides Heap Snapshots and Allocation Timeline tools to identify what is consuming memory and where references are being held unexpectedly.
+    </Tip>
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  The `class` syntax does not fundamentally change how JavaScript objects work — it is a cleaner interface over the same prototype system. Knowing both representations (constructor function + manual prototype assignment vs. `class`/`extends`) shows a deep understanding of the language.
+</Note>

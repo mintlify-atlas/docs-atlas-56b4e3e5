@@ -1,0 +1,215 @@
+---
+title: "Next.js Middleware, Routing, and the Edge Runtime API"
+description: "Interview Q&A covering Next.js Middleware, the Edge Runtime, client-side routing internals, the History API, and React Router's navigation model."
+---
+
+Routing is one of the most fundamental aspects of any web framework. Next.js provides a file-system-based router that supports both server-side and client-side navigation, and a powerful Middleware layer that intercepts requests before they reach a route handler. Understanding how these mechanisms work under the hood — from `window.history.pushState` to Edge Runtime execution — is a frequent topic in frontend engineering interviews.
+
+<AccordionGroup>
+  <Accordion title="What is Next.js Middleware and what can it do?">
+    **Next.js Middleware** allows you to run code on the server before a request is fulfilled — before the route handler, API route, or static asset is served. It is defined in a single `middleware.ts` file at the root of the project (or inside the `src/` directory if you use that convention).
+
+    Middleware receives a `NextRequest` and can return a `NextResponse` that redirects, rewrites, or modifies the request/response. If it calls `NextResponse.next()`, the request continues to the matched route.
+
+    **Common use cases:**
+
+    - **Authentication and authorization** — check for a valid session cookie and redirect unauthenticated users to the login page before the protected page is loaded.
+    - **Redirects and rewrites** — handle URL migrations, A/B testing routing, or multi-tenant subdomain routing at the edge.
+    - **Request/response header modification** — inject security headers, correlation IDs, or locale information.
+    - **Geolocation-based routing** — redirect users to region-specific pages based on the `geo` data provided by the edge network.
+
+    **Basic example — authentication guard:**
+
+    ```ts
+    // middleware.ts
+    import { NextResponse } from 'next/server';
+    import type { NextRequest } from 'next/server';
+
+    export function middleware(request: NextRequest) {
+      const token = request.cookies.get('session-token');
+
+      // Redirect unauthenticated users away from protected routes
+      if (!token && request.nextUrl.pathname.startsWith('/dashboard')) {
+        return NextResponse.redirect(new URL('/login', request.url));
+      }
+
+      return NextResponse.next();
+    }
+
+    // Only run middleware on these paths
+    export const config = {
+      matcher: ['/dashboard/:path*', '/account/:path*'],
+    };
+    ```
+
+    Using the `matcher` config prevents middleware from running on every request (including static assets like images and fonts), which keeps performance overhead low.
+
+    **Header modification example:**
+
+    ```ts
+    export function middleware(request: NextRequest) {
+      const response = NextResponse.next();
+
+      // Add a security header to every response
+      response.headers.set('X-Frame-Options', 'DENY');
+      response.headers.set('X-Content-Type-Options', 'nosniff');
+
+      return response;
+    }
+    ```
+
+    <Note>
+      Middleware runs on every matched request, including prefetch requests from Next.js's `<Link>` component. Keep middleware logic lightweight — heavy computation here will degrade navigation performance across the entire application.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the Edge Runtime and how does it differ from Node.js?">
+    Next.js Middleware runs in the **Edge Runtime** — not in the traditional Node.js runtime. Understanding the distinction is important for knowing what you can and cannot do in middleware.
+
+    **What is the Edge Runtime?**
+
+    The Edge Runtime is a lightweight, sandboxed JavaScript environment designed to run at CDN edge nodes distributed around the world, as close as possible to each user. It is based on the web platform APIs (the same APIs available in modern browsers) rather than the full Node.js API surface.
+
+    Because edge nodes are geographically distributed, code running in the Edge Runtime executes with:
+
+    - **Near-zero cold starts** — the lightweight runtime initializes nearly instantly, unlike Node.js cold starts in serverless environments.
+    - **Low latency** — requests are handled at the node geographically closest to the user, reducing round-trip time.
+    - **Global distribution** — no single region bottleneck.
+
+    **API availability comparison:**
+
+    | Available in Edge Runtime | Not available in Edge Runtime |
+    |--------------------------|-------------------------------|
+    | `fetch` | `fs` (filesystem) |
+    | `URL`, `URLSearchParams` | `path`, `os` |
+    | `Request`, `Response`, `Headers` | Worker threads |
+    | `crypto` (Web Crypto API) | Most Node.js built-in modules |
+    | `TextEncoder`, `TextDecoder` | Native Node.js addons |
+    | Cookies, headers manipulation | Database drivers (direct TCP connections) |
+
+    **Practical implications:**
+
+    You cannot use a database client like Prisma or `pg` directly in middleware. For database checks (e.g., validating a session token against a database), you should either use an edge-compatible solution (like a JWT that is verified cryptographically without a DB call) or a managed session service that exposes an HTTP API.
+
+    ```ts
+    // Valid in Edge Runtime — verifying a JWT with Web Crypto
+    import { jwtVerify } from 'jose';
+
+    export async function middleware(request: NextRequest) {
+      const token = request.cookies.get('session')?.value;
+
+      try {
+        await jwtVerify(token, new TextEncoder().encode(process.env.JWT_SECRET));
+        return NextResponse.next();
+      } catch {
+        return NextResponse.redirect(new URL('/login', request.url));
+      }
+    }
+    ```
+
+    <Warning>
+      If you need Node.js APIs in a Next.js route (e.g., filesystem access, native modules), use a Route Handler (`app/api/route.ts`) which runs in the Node.js runtime, not Middleware.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How does client-side routing work internally?">
+    Client-side routing enables navigation between pages without a full browser reload — a core feature of Single Page Applications (SPAs) and frameworks like React Router and Next.js.
+
+    **The problem it solves:**
+
+    By default, clicking a link causes the browser to send an HTTP request to the server and replace the entire page. Client-side routing intercepts this navigation and replaces only the necessary parts of the UI using JavaScript.
+
+    **Step-by-step mechanics:**
+
+    1. **Link interception** — a library like React Router attaches a click handler to `<Link>` elements. When clicked, `event.preventDefault()` stops the browser from following the link normally.
+
+    2. **History API update** — `window.history.pushState(state, '', '/new-path')` updates the browser's URL bar and adds an entry to the session history stack — without sending any HTTP request or re-loading the page.
+
+    3. **Route matching** — the router reads the new pathname and finds the matching route definition in the route table.
+
+    4. **Component rendering** — the router renders the component mapped to the new path, replacing the previous route's component in the React tree.
+
+    5. **Data fetching** — the newly rendered component fires its data fetches (via `useEffect`, loader functions, or TanStack Query) to populate its content.
+
+    ```tsx
+    // React Router — how navigation is triggered internally (simplified)
+    function navigate(to: string) {
+      // 1. Update the URL without a page reload
+      window.history.pushState({}, '', to);
+
+      // 2. Notify all subscribers that the location changed
+      listeners.forEach(listener => listener());
+    }
+
+    // 3. Router reads window.location and renders the matching component
+    function Router() {
+      const [location, setLocation] = useState(window.location.pathname);
+
+      useEffect(() => {
+        const handlePopState = () => setLocation(window.location.pathname);
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+      }, []);
+
+      return <RouteSwitch path={location} routes={routes} />;
+    }
+    ```
+
+    **Browser back/forward buttons:**
+
+    When the user presses Back or Forward, the browser fires a `popstate` event. React Router listens for this event and re-renders the component matching the URL the browser has restored, again without a full page reload.
+
+    **Next.js App Router client-side navigation:**
+
+    In the Next.js App Router, client navigation works similarly but uses RSC (React Server Component) Payloads instead of full HTML. When a `<Link>` is clicked, Next.js fetches the RSC Payload for the destination route (or uses it from the client router cache), and React reconciles the new component tree with the current one — updating only the changed segments.
+
+    <Tip>
+      Next.js `<Link>` components automatically prefetch the RSC Payload for linked routes when they enter the viewport. This means navigation to prefetched pages feels nearly instantaneous, even over slower connections.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the History API and why does SPA routing depend on it?">
+    The **History API** (`window.history`) is a browser-native interface that gives JavaScript programs read and write access to the browser's session history — the stack of URLs the user has visited in the current tab.
+
+    **Key methods:**
+
+    | Method | What it does |
+    |--------|-------------|
+    | `history.pushState(state, title, url)` | Adds a new entry to the history stack and updates the address bar. Does **not** trigger a page load. |
+    | `history.replaceState(state, title, url)` | Updates the current history entry (URL and state) without adding a new one. |
+    | `history.back()` | Navigates to the previous entry (equivalent to the Back button). |
+    | `history.forward()` | Navigates to the next entry (equivalent to the Forward button). |
+    | `history.go(n)` | Navigates `n` steps forward (positive) or backward (negative) in history. |
+
+    **The `popstate` event:**
+
+    Navigation triggered by `history.back()`, `history.forward()`, `history.go()`, or the browser's own buttons fires the `popstate` event. SPAs listen for this event to re-render the correct component when the user navigates history:
+
+    ```ts
+    window.addEventListener('popstate', (event) => {
+      // event.state contains the state object passed to pushState/replaceState
+      renderRoute(window.location.pathname);
+    });
+    ```
+
+    **Important nuance:**
+
+    `pushState` and `replaceState` do **not** fire `popstate`. Only browser-driven history navigation triggers it. This is why SPA routers must separately track calls to `pushState` to update their internal location state.
+
+    **Why `pushState` replaced hash-based routing:**
+
+    Before the History API was widely supported, SPAs used URL fragments (`/#/about`) to represent routes without causing page reloads. The downside was that `#` routes look unclean and are treated differently by servers. `pushState` allows full, clean URLs (`/about`) while still preventing page reloads — but requires the server to serve the SPA's `index.html` for any path, since the browser may navigate directly to `/about` on a page refresh.
+
+    ```
+    # Server must handle all routes for SPA to work correctly
+    # Example nginx configuration
+    location / {
+      try_files $uri $uri/ /index.html;
+    }
+    ```
+
+    <Note>
+      In Next.js, this server-fallback concern is handled automatically because every route either has a pre-rendered page or a server-side handler. Client-side routing in Next.js never results in a 404 on page refresh the way a naive SPA deployment would.
+    </Note>
+  </Accordion>
+</AccordionGroup>

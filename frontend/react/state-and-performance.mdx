@@ -1,0 +1,228 @@
+---
+title: "React state, props, and performance optimization"
+description: "Props vs state, controlled vs uncontrolled components, when to use global state, how to prevent unnecessary re-renders, and why array index keys cause bugs."
+---
+
+Managing state well in React means understanding the boundaries between where data lives (props vs. state), how tightly the UI couples to that data (controlled vs. uncontrolled), and how to keep re-renders efficient as the component tree grows. Performance optimization in React is largely about being deliberate — understanding what triggers renders, what the cost of each render actually is, and applying memoization or state restructuring only where profiling shows a genuine bottleneck rather than as a reflex.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between props and state?">
+    **Props** are data passed from a parent component to a child component. They are **read-only**: the receiving component cannot modify them. This constraint enforces React's unidirectional data flow — data moves down the tree, and changes propagate predictably from parent to child.
+
+    ```tsx
+    function ChildComponent({ name }) {
+      // Props are read-only — this would cause an error:
+      // name = "New Name";
+      return <div>{name}</div>;
+    }
+    ```
+
+    **State** is data owned and managed by the component itself. It is mutable — the component can call its setter to update the value — and any state change triggers a re-render of that component and its descendants.
+
+    ```tsx
+    function Counter() {
+      const [count, setCount] = useState(0);
+
+      return (
+        <button onClick={() => setCount(count + 1)}>
+          Clicked {count} times
+        </button>
+      );
+    }
+    ```
+
+    **What if a child needs to change a value it received via props?**
+
+    The parent owns the data, so the parent should own the state. Pass the state setter (or a handler that calls it) down as a prop. This pattern is called **lifting state up**:
+
+    ```tsx
+    function Parent() {
+      const [value, setValue] = useState('');
+
+      return <Child value={value} onChange={setValue} />;
+    }
+
+    function Child({ value, onChange }) {
+      return <input value={value} onChange={e => onChange(e.target.value)} />;
+    }
+    ```
+
+    This keeps the data flow unidirectional while still allowing the child to request changes.
+  </Accordion>
+
+  <Accordion title="What is the difference between controlled and uncontrolled components?">
+    The distinction describes **where form input state lives**.
+
+    **Controlled components** bind input values to React state. Every keystroke calls an `onChange` handler that updates state, and the input's `value` prop is always driven by that state. React is the single source of truth for the input's current value.
+
+    ```tsx
+    function ControlledForm() {
+      const [email, setEmail] = useState('');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        console.log(email); // Always reflects current value
+      };
+
+      return (
+        <form onSubmit={handleSubmit}>
+          <input
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+          />
+          {email.length > 0 && email.includes('@') === false && (
+            <span>Invalid email</span> // Real-time validation is easy
+          )}
+        </form>
+      );
+    }
+    ```
+
+    **Uncontrolled components** let the DOM manage the input's value. You use `useRef` to read the value when needed (typically on form submission), rather than tracking every change.
+
+    ```tsx
+    function UncontrolledForm() {
+      const inputRef = useRef(null);
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        console.log(inputRef.current.value); // Read once on submit
+      };
+
+      return (
+        <form onSubmit={handleSubmit}>
+          <input ref={inputRef} />
+        </form>
+      );
+    }
+    ```
+
+    **When to use each:**
+
+    | Situation | Recommended approach |
+    |---|---|
+    | Real-time validation as the user types | Controlled |
+    | Dynamic fields that depend on each other | Controlled |
+    | Simple form where you only need the value on submit | Uncontrolled |
+    | Performance-sensitive forms with many fields | Uncontrolled (avoids re-renders per keystroke) |
+
+    <Tip>
+      Libraries like React Hook Form use uncontrolled inputs internally and expose a controlled-like API, giving you the ergonomics of controlled components with much better performance for large forms.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Why is using an array index as a key prop a bad practice?">
+    React uses `key` props to identify which list items correspond to which rendered elements across re-renders. When the list changes — items added, removed, or reordered — React uses keys to decide what to destroy and what to keep.
+
+    When you use the array index as a key, the key is tied to the **position** in the array, not the **identity** of the item. If an item moves or is removed, the indices of every item after it shift — and React misidentifies them.
+
+    ```jsx
+    // If the first item is removed, every remaining item's index shifts by -1.
+    // React sees "key=0" and thinks it's the same element, but it's now
+    // pointing to a completely different data item.
+    {items.map((item, index) => (
+      <ListItem key={index} data={item} />
+    ))}
+    ```
+
+    This causes two categories of problems:
+
+    - **Performance**: React re-renders items that didn't actually change because it incorrectly identifies them as different.
+    - **Bugs with local state**: if `ListItem` has its own state (e.g., an open/closed accordion, a text input value), that state stays attached to the position — not the item. Removing the first item makes every subsequent item appear to have the state of the one above it.
+
+    **Prefer stable, unique IDs:**
+
+    ```jsx
+    // Use a database ID or other unique, stable identifier
+    {items.map(item => (
+      <ListItem key={item.id} data={item} />
+    ))}
+    ```
+
+    If no unique ID is available, options include combining multiple fields (`${item.title}_${item.userId}`) or generating a UUID before the data enters the component. The exception: index keys are safe for **static lists** where items are never added, removed, or reordered.
+  </Accordion>
+
+  <Accordion title="How do you prevent unnecessary re-renders in React?">
+    React re-renders a component whenever its state or props change. The goal of optimization is to make sure renders only happen when the output would actually differ.
+
+    **`React.memo`** — wraps a component and skips re-rendering if props haven't changed (shallow comparison). Useful when a parent re-renders frequently but the child's props stay the same.
+
+    ```jsx
+    const MemoizedCard = React.memo(function Card({ title, description }) {
+      return <div><h2>{title}</h2><p>{description}</p></div>;
+    });
+    ```
+
+    **`useMemo`** — memoizes the result of an expensive computation. The cached value is reused until the listed dependencies change.
+
+    ```jsx
+    const sortedItems = useMemo(() => {
+      return [...items].sort((a, b) => a.name.localeCompare(b.name));
+    }, [items]); // Only re-sorts when items changes
+    ```
+
+    **`useCallback`** — memoizes a function reference. Important when passing callbacks to memoized child components, since a new function object on every render would defeat `React.memo`.
+
+    ```jsx
+    const handleDelete = useCallback((id) => {
+      setItems(prev => prev.filter(item => item.id !== id));
+    }, []); // Stable reference — MemoizedCard won't re-render because of this prop
+    ```
+
+    **React DevTools Profiler** — records renders and shows which components rendered, how many times, and for how long. Use it to identify actual bottlenecks before applying any of the above.
+
+    <Warning>
+      More memoization is not always better. Each `useMemo` and `useCallback` call stores a previous value in memory and runs a shallow comparison of dependencies on every render. For cheap computations or stable functions, this overhead can cost more than the re-render you're trying to avoid. Optimize based on measured profiler data, not instinct.
+    </Warning>
+
+    ```jsx
+    // Unnecessary — the function is trivial and the component is not memoized
+    const handleClick = useCallback(() => {
+      console.log('clicked');
+    }, []);
+
+    // Worthwhile — expensive computation on a large dataset
+    const processedData = useMemo(() => {
+      return expensiveTransformation(largeDataset);
+    }, [largeDataset]);
+    ```
+  </Accordion>
+
+  <Accordion title="Why use a global state management library? When is it overkill?">
+    Global state management libraries (Redux, Zustand, Jotai, Recoil, and others) solve three concrete problems that grow painful as applications scale:
+
+    **1. Cross-component state sharing without prop drilling**
+
+    When state needs to be read or updated by components at different levels of the tree, passing it through intermediate components that don't use it ("prop drilling") becomes unmanageable. Global state lets any component subscribe to just the slice it needs.
+
+    **2. Separation of concerns**
+
+    Centralizing state logic outside components means components focus on rendering. In Redux, for example, all state transitions live in reducers — testable in isolation, independent of any component. This separation aligns with the principle of keeping UI logic and business logic distinct.
+
+    **3. Selective re-rendering**
+
+    Modern libraries like Zustand use subscription mechanisms so that only components subscribed to a changed slice of state re-render. This is more efficient than lifting state high in the tree and having unrelated subtrees re-render.
+
+    ```jsx
+    // Zustand store — state and update logic in one place
+    const useStore = create((set) => ({
+      user: null,
+      setUser: (user) => set({ user }),
+    }));
+
+    // Any component can read or update without prop drilling
+    function Profile() {
+      const user = useStore((state) => state.user);
+      return <div>{user?.name}</div>;
+    }
+    ```
+
+    **When it's overkill**
+
+    For small applications, introducing a state management library adds complexity — new concepts, new files, new patterns — without a proportional benefit. React's built-in `useState` and `useContext` cover most needs at that scale. The right time to reach for a library is when you actually feel the pain: prop drilling that spans many layers, state synchronization bugs across distant components, or re-render performance problems that context alone can't solve.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  The `useContext` hook is React's built-in solution for sharing state without prop drilling. It works well for low-frequency updates (themes, locale, authenticated user). For high-frequency updates or complex state transitions, a dedicated library typically performs better.
+</Note>

@@ -1,0 +1,221 @@
+---
+title: "Security and Authentication Concepts for Interviews"
+description: "Interview Q&A on JWT, cookies vs sessions, CSRF, SQL injection, encryption, IP addressing, NAT, and DHCP — from the Maeil Mail archive."
+---
+
+Authentication and network security topics appear consistently in backend interviews because they reveal how well a candidate understands trust boundaries, data exposure risks, and the practical trade-offs between convenience and safety. This page covers the most common questions from the Maeil Mail archive, from the basics of session storage to low-level IP address management.
+
+<AccordionGroup>
+
+  <Accordion title="What is the difference between cookies and sessions?">
+    Both cookies and sessions work around the **stateless** nature of HTTP — the protocol has no built-in concept of a "logged-in user" — but they store state in different places.
+
+    | Aspect | Cookie | Session |
+    |--------|--------|---------|
+    | Storage location | Client (browser) | Server |
+    | Security | Weaker — user can read and modify values | Stronger — sensitive data never leaves the server |
+    | Capacity | ~4 KB per domain | Limited only by server memory |
+    | Lifetime | Set by `Expires` / `Max-Age`; survives browser restarts if configured | Expires after a server-side inactivity timeout |
+    | Network overhead | Sent with every HTTP request | Only a session ID cookie is sent |
+
+    **Typical use pattern:**
+    - Store **non-sensitive preferences** (theme, locale, anonymous cart contents) in cookies.
+    - Store **authentication state and sensitive data** in server-side sessions, passing only the opaque session ID to the client via a cookie.
+
+    <Note>
+      JWT-based token authentication is now widely used as a stateless alternative to sessions. Instead of looking up a session record on the server, the server validates the token's signature and reads claims directly from the token.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does session-based authentication work in a multi-server environment?">
+    When a single server stores session data in memory, scaling to multiple servers creates a **session inconsistency problem**: a user logged in on Server A may be routed to Server B by the load balancer, where their session does not exist.
+
+    **Three common solutions:**
+
+    **1. Sticky sessions**
+    The load balancer pins each user to the same server for the lifetime of their session (using the cookie value or IP hash).
+    - Pro: Simple to implement, no session data replication needed.
+    - Con: Uneven load distribution; if that server goes down the user is logged out.
+
+    **2. Session clustering**
+    Session data is replicated to all servers in the cluster whenever it changes.
+    - Pro: Tolerates individual server failures.
+    - Con: Replication consumes memory on every node; replication lag can cause brief inconsistencies; network overhead grows with cluster size.
+
+    **3. External session storage**
+    Session data is moved to a dedicated shared store (e.g., Redis).
+    - Pro: Solves both the load distribution and fault tolerance problems; servers are fully stateless.
+    - Con: The external store itself becomes a potential **Single Point of Failure (SPOF)** — requires its own high-availability setup; adds a network hop per request.
+
+    <Tip>
+      If you are designing a new system, JWT or another stateless token approach sidesteps session consistency entirely because no server-side state is required.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is JWT and what security concerns should you be aware of?">
+    **JWT (JSON Web Token)** is a compact, self-contained token for transmitting claims between parties. It consists of three Base64URL-encoded sections separated by dots:
+
+    ```
+    header.payload.signature
+    ```
+
+    - **Header** — specifies the token type (`JWT`) and signing algorithm (e.g., `HS256`).
+    - **Payload** — contains claims: user ID, roles, expiry time, etc.
+    - **Signature** — `HMAC(base64url(header) + "." + base64url(payload), secret)` — proves the token has not been tampered with.
+
+    Because all state is in the token, JWTs are **stateless**: the server validates the signature without consulting a database, which makes them well-suited for distributed and microservice architectures.
+
+    **Security pitfalls to know:**
+
+    - **Payload is not encrypted.** Base64 decoding reveals the payload. Never store passwords or sensitive PII in a JWT.
+    - **Weak secrets** are vulnerable to brute-force attacks. Use a cryptographically random secret of sufficient length.
+    - **`alg: none` attack** — an attacker modifies the header to `"alg": "none"`, stripping the signature. Libraries that honour this claim will accept any payload. Always validate the algorithm server-side and reject `none`.
+    - **Token theft** — a stolen JWT is valid until expiry. Mitigate with short expiry times, refresh tokens, Refresh Token Rotation, and revocation lists.
+    - **User experience** — a token that expires while a user is mid-action (e.g., writing a long post) will discard their work on submission. Consider sliding-session strategies or proactive token refresh.
+
+    <Warning>
+      Store JWTs in `httpOnly`, `Secure` cookies rather than `localStorage` to reduce the XSS attack surface. `localStorage` is accessible to any JavaScript running on the page.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is a CSRF attack and how do you defend against it?">
+    **CSRF (Cross-Site Request Forgery)** tricks an authenticated user's browser into sending a forged request to a site where they are logged in — without the user's knowledge.
+
+    **How it works:**
+    1. The user logs into `maeil-mail.com`. The server sets a session cookie.
+    2. The user visits a malicious site. That site's page contains:
+
+    ```html
+    <img src="https://maeil-mail.com/member/changePassword?newValue=1234" />
+    ```
+
+    3. The browser automatically attaches the session cookie when loading the image URL, so `maeil-mail.com` receives a fully authenticated password-change request.
+
+    **Defences:**
+
+    | Method | How it works | Limitation |
+    |--------|--------------|------------|
+    | **Referer / Origin header check** | Compare the request's `Referer` or `Origin` header to the expected host. | Headers can be suppressed or (with effort) spoofed. |
+    | **CSRF token** | Embed a random per-session token in forms; validate it server-side on state-changing requests. | Requires server-rendered forms (JSP, Thymeleaf, etc.). |
+    | **SameSite cookies** | Set `SameSite=Strict` or `SameSite=Lax` on session cookies so the browser refuses to send them with cross-site requests. | Older browsers do not support `SameSite`. |
+    | **CORS + SOP** | Same-Origin Policy prevents cross-origin reads; CORS restricts which origins may trigger credentialed requests. | Does not prevent simple form POST submissions. |
+
+    <Note>
+      **CSRF** and **XSS** are often confused. CSRF exploits the trust a server has in the user's browser (the cookie is sent automatically). XSS exploits the trust a user's browser has in a site (injected script runs as the site). They require different defences.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is SQL injection and how do you prevent it?">
+    **SQL injection** occurs when user-supplied input is concatenated directly into a SQL query, allowing an attacker to alter the query's logic.
+
+    **Vulnerable example (Java):**
+
+    ```java
+    String sql = "SELECT * FROM users WHERE username = '" + username
+               + "' AND password = '" + password + "'";
+    ```
+
+    If an attacker supplies `admin' --` as the username, the query becomes:
+
+    ```sql
+    SELECT * FROM users WHERE username = 'admin' -- ' AND password = '...';
+    ```
+
+    Everything after `--` is a comment, so the password check is skipped entirely.
+
+    **Other common payloads:**
+    - `' OR '1'='1` — always-true condition, returns all rows.
+    - `' UNION SELECT * FROM accounts --` — leaks data from another table.
+    - `'; DROP TABLE users; --` — destroys data.
+
+    **Prevention techniques:**
+
+    1. **Parameterised queries / PreparedStatement** — the most reliable fix. The driver handles escaping automatically.
+
+    ```java
+    String sql = "SELECT * FROM users WHERE username = ? AND password = ?";
+    PreparedStatement pstmt = conn.prepareStatement(sql);
+    pstmt.setString(1, username);
+    pstmt.setString(2, password);
+    ```
+
+    2. **ORM frameworks** (JPA, Hibernate) — generate parameterised queries by default.
+    3. **Input validation** — reject or sanitise inputs that contain SQL meta-characters.
+    4. **Least-privilege database accounts** — the application's DB user should not have `DROP` or `ALTER` permissions.
+    5. **Suppress error details** — do not expose SQL error messages to end users; they reveal schema information useful to attackers.
+  </Accordion>
+
+  <Accordion title="What is the difference between symmetric and asymmetric encryption?">
+    **Symmetric key encryption** uses the **same key** for both encryption and decryption.
+
+    - Fast; well-suited for bulk data encryption (e.g., AES for file contents or TLS session data).
+    - The key must be shared securely before communication begins. If the key is intercepted, all past and future messages are compromised.
+    - Key management becomes complex as the number of communication pairs grows (each pair needs a unique key).
+
+    **Asymmetric key encryption** uses a **key pair**: a public key (freely shared) and a private key (kept secret).
+
+    - The sender encrypts with the **recipient's public key**; only the recipient's private key can decrypt it.
+    - Solves the key distribution problem — the public key can be published openly.
+    - Significantly slower than symmetric encryption.
+
+    **Digital signatures** flip the model: the sender encrypts a message digest with their **private key**, and anyone with the sender's **public key** can verify the signature. This proves authenticity (only the private-key holder could have created it) but does not provide confidentiality.
+
+    **TLS uses both:** asymmetric encryption to securely exchange a symmetric session key during the handshake, and symmetric encryption for all subsequent data transfer.
+  </Accordion>
+
+  <Accordion title="What is classful IP addressing and what replaced it?">
+    IPv4 addresses are 32-bit values (4 octets, each 0–255). **Classful addressing** divides this space into fixed-size blocks called classes:
+
+    | Class | Leading bits | Network octets | Host octets | Networks | Hosts per network |
+    |-------|-------------|----------------|-------------|----------|-------------------|
+    | A     | `0`         | 1              | 3           | 128      | ~16 million       |
+    | B     | `10`        | 2              | 2           | 16,384   | ~65,000           |
+    | C     | `110`       | 3              | 1           | 2 million| 254               |
+
+    **The problem:** the fixed class sizes waste addresses. An organisation with 300 hosts cannot use Class C (max 254 hosts) and must use Class B, leaving ~65,000 addresses unused.
+
+    **Classless Inter-Domain Routing (CIDR)** replaced classful addressing. Instead of fixed classes, a **subnet mask** defines the boundary between the network and host portions of an address. The mask is expressed in CIDR notation as a suffix:
+
+    ```
+    168.168.168.168/24   ← first 24 bits are the network; last 8 bits are hosts
+    ```
+
+    A bitwise AND of the IP address and the subnet mask yields the network address (`168.168.168.0`). CIDR allows any power-of-two block size, dramatically reducing waste.
+  </Accordion>
+
+  <Accordion title="What is NAT and why is it necessary?">
+    IP addresses are divided into **public** (globally routable, unique) and **private** (only valid within a local network, e.g., `192.168.x.x`, `10.x.x.x`).
+
+    Private IP addresses cannot be routed on the public internet. **NAT (Network Address Translation)** solves this by having a router rewrite IP addresses at the network boundary:
+
+    - **Outgoing packet:** the router replaces the private source IP with the router's public IP.
+    - **Incoming packet:** the router looks up the destination port in its NAT table and rewrites the public destination IP back to the correct private IP.
+
+    Because a single public IP could serve many private hosts, routers typically implement **NAPT (Network Address Port Translation)** — each private host gets a unique public port, allowing the router to distinguish return traffic:
+
+    | Private IP     | Private Port | Public IP | Public Port |
+    |----------------|-------------|-----------|-------------|
+    | 192.168.10.2   | 8000        | 1.2.3.4   | 8001        |
+    | 192.168.10.3   | 8000        | 1.2.3.4   | 8002        |
+
+    NAT was a pragmatic stopgap for IPv4 address exhaustion. IPv6 provides enough addresses that NAT is not required, though it is still used for security isolation.
+  </Accordion>
+
+  <Accordion title="What is the difference between static and dynamic IP assignment?">
+    **Static IP assignment** requires a network administrator to manually configure each host's IP address, subnet mask, default gateway, and DNS server. It is predictable and reliable for servers that must always be reachable at the same address, but it becomes error-prone and unscalable as the number of hosts grows.
+
+    **Dynamic IP assignment** uses **DHCP (Dynamic Host Configuration Protocol)** to automatically lease an available IP to a host on demand. The assignment process follows four steps (DORA):
+
+    1. **Discover** — the host broadcasts a `DHCPDISCOVER` message to find DHCP servers.
+    2. **Offer** — a DHCP server responds with a `DHCPOFFER` containing an available IP address and lease duration.
+    3. **Request** — the host broadcasts a `DHCPREQUEST` accepting the offer.
+    4. **Acknowledgment** — the server confirms with a `DHCPACK`, finalising the lease.
+
+    The host uses the assigned address until the lease expires. Before expiry, the host can issue a **DHCP Lease Renewal** to extend the lease without going through the full DORA cycle.
+
+    <Note>
+      Because dynamic addresses can change between leases, servers and infrastructure that need consistent DNS entries (e.g., database primaries, internal APIs) are typically given static IPs or reserved DHCP entries.
+    </Note>
+  </Accordion>
+
+</AccordionGroup>

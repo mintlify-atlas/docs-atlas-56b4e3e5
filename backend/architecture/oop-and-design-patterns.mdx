@@ -1,0 +1,326 @@
+---
+title: "OOP Principles and Design Patterns Interview Q&A"
+description: "Key interview questions on object-oriented programming, the Strategy, Template Method, Singleton, Null Object, CQRS, and Transactional Outbox patterns."
+---
+
+Object-oriented design and behavioral patterns are staple topics in backend interviews. Interviewers test whether candidates can explain the four pillars of OOP from first principles, justify when a design pattern genuinely helps (and when it adds unnecessary complexity), and show that they understand the trade-offs behind each choice. This page walks through the most frequently asked questions — from core OOP mechanics to widely used patterns like Strategy, Template Method, Singleton, and the architectural patterns CQRS and Transactional Outbox.
+
+<AccordionGroup>
+  <Accordion title="What are the four pillars of object-oriented programming?">
+    Object-oriented programming (OOP) is a paradigm that organizes software around objects — entities that combine state (fields) and behavior (methods). Objects are assigned roles and responsibilities and collaborate with each other to form a complete program.
+
+    The four core pillars are:
+
+    **Encapsulation** bundles an object's state and behavior into a single unit. Internal implementation details are hidden; only a well-defined interface is exposed. This protects the object's integrity and limits the blast radius of internal changes.
+
+    **Abstraction** strips away unnecessary details and exposes only what is essential. Shared characteristics are extracted into an interface or abstract class, while concrete details are delegated to implementations.
+
+    **Polymorphism** allows a single interface to take many forms. In Java this is achieved through overloading (multiple methods with the same name but different parameter lists) and overriding (a subclass redefines an inherited method).
+
+    **Inheritance** lets a subclass acquire the attributes and behaviors of its parent class. It promotes code reuse and enables extension without modifying existing code.
+
+    **The Tell Don't Ask (TDA) principle**
+
+    A practical consequence of encapsulation is TDA: instead of pulling data out of an object and making decisions on its behalf, you send the object a message and let it act on its own state.
+
+    ```java
+    // Bad — caller extracts state and makes the decision
+    public class Account {
+        private BigDecimal balance;
+
+        public BigDecimal getBalance() { return this.balance; }
+        public void setBalance(BigDecimal balance) { this.balance = balance; }
+    }
+
+    BigDecimal balance = account.getBalance();
+    if (balance.compareTo(withdrawalAmount) < 0) {
+        throw new IllegalStateException("Insufficient balance.");
+    }
+    balance = balance.subtract(withdrawalAmount);
+    account.setBalance(balance);
+    ```
+
+    ```java
+    // Good — caller tells the object what to do; the object decides how
+    public class Account {
+        private BigDecimal balance;
+
+        public void withdraw(BigDecimal withdrawalAmount) {
+            if (balance.compareTo(withdrawalAmount) < 0) {
+                throw new IllegalStateException("Insufficient balance.");
+            }
+            this.balance = balance.subtract(withdrawalAmount);
+        }
+    }
+
+    account.withdraw(withdrawalAmount);
+    ```
+
+    <Tip>
+      Following TDA raises cohesion (the object uses all of its own data) and lowers coupling (callers do not need to know how the object works internally).
+    </Tip>
+
+    **Abstract class vs. interface**
+
+    | | Abstract class | Interface |
+    |---|---|---|
+    | Purpose | Share a common implementation | Enforce a contract |
+    | Methods | Regular + abstract methods | Abstract + `default` methods (Java 8+) |
+    | Fields | Instance variables allowed | Constants only |
+    | Inheritance | Single | Multiple |
+    | Use when | is-a relationship, code reuse | can-do relationship, multiple inheritance |
+
+    **Overloading vs. overriding**
+
+    *Overloading* defines multiple methods with the same name in one class, distinguished by parameter count, type, or order. The return type alone is not sufficient to differentiate overloads.
+
+    *Overriding* redefines a parent method in a subclass with the same signature and return type. The access modifier may be widened but not narrowed.
+
+    **Diamond problem**
+
+    The diamond problem is an ambiguity that arises with multiple inheritance: if classes B and C both override a method from A, and D inherits from both B and C, the compiler cannot determine which version D should use. Java avoids this for classes by prohibiting multiple class inheritance. Interfaces can define `default` methods and multiple interface inheritance is permitted, but the programmer must resolve any conflicts explicitly.
+  </Accordion>
+
+  <Accordion title="What is the Strategy pattern and when should you use it?">
+    The **Strategy pattern** separates an object's behavior from its implementation by defining the behavior as an interface and injecting concrete implementations at runtime. Rather than modifying a class to change what it does, you swap out the strategy.
+
+    ```java
+    interface MoveStrategy {
+        boolean isMovable(int input);
+    }
+
+    class EvenNumberMoveStrategy implements MoveStrategy {
+        @Override
+        public boolean isMovable(int input) {
+            return (input % 2) == 0;
+        }
+    }
+
+    class OddNumberMoveStrategy implements MoveStrategy {
+        @Override
+        public boolean isMovable(int input) {
+            return (input % 2) != 0;
+        }
+    }
+
+    class Car {
+        private final MoveStrategy strategy;
+        private final int position;
+
+        public Car(MoveStrategy strategy, int position) {
+            this.strategy = strategy;
+            this.position = position;
+        }
+
+        public Car move(int input) {
+            if (strategy.isMovable(input)) {
+                return new Car(strategy, position + 1);
+            }
+            return this;
+        }
+    }
+    ```
+
+    By injecting a `MoveStrategy`, the `Car` class is open for extension (new movement rules) but closed for modification — it never needs to change when a new rule is added. This directly embodies the Open-Closed Principle.
+
+    <Note>
+      Prefer the Strategy pattern over a growing chain of `if-else` or `switch` statements that dispatch on type. Each branch is a candidate strategy.
+    </Note>
+
+    **When to use it:**
+    - You need to swap algorithms or behaviors at runtime.
+    - Several classes differ only in how they execute a particular step.
+    - You want to eliminate conditional logic that selects from a fixed set of behaviors.
+  </Accordion>
+
+  <Accordion title="What is the Template Method pattern and what are its trade-offs?">
+    The **Template Method pattern** defines the skeleton of an algorithm in a base class and defers one or more steps to subclasses. The overall sequence is fixed in a `final` template method; only the individual steps vary.
+
+    ```java
+    public abstract class Student {
+
+        public abstract void study();
+        public abstract void watchYoutube();
+        public abstract void sleep();
+
+        // The template method — sequence is fixed, cannot be overridden
+        final public void doDailyRoutine() {
+            study();
+            watchYoutube();
+            sleep();
+        }
+    }
+
+    class BackendStudent extends Student {
+
+        @Override
+        public void study() {
+            System.out.println("Watch the JPA lecture.");
+        }
+
+        @Override
+        public void watchYoutube() {
+            System.out.println("Watch a backend engineering talk.");
+        }
+
+        @Override
+        public void sleep() {
+            System.out.println("Sleep 7 hours.");
+        }
+    }
+    ```
+
+    **Advantages:**
+    - Common logic lives in one place — no duplication across subclasses.
+    - The invariant sequence is enforced; subclasses cannot accidentally reorder steps.
+
+    **Disadvantages:**
+    - Developers must read and understand the base class before implementing a subclass.
+    - Any change to the base class can break all subclasses simultaneously.
+    - Inheritance is a strong coupling mechanism; prefer composition when flexibility is more important than the shared skeleton.
+
+    <Warning>
+      Template Method uses inheritance, which creates tight coupling between the base class and every subclass. If the variations are large or the hierarchy grows deep, consider the Strategy pattern with composition instead.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is the Singleton pattern, and what are its pitfalls?">
+    The **Singleton pattern** ensures that a class has exactly one instance and provides a global access point to it. No matter how many times the constructor-equivalent method is called, the same object is returned.
+
+    ```java
+    public class Singleton {
+
+        // Eagerly initialized — thread-safe without synchronization
+        private static final Singleton INSTANCE = new Singleton();
+
+        private Singleton() { /* prevent external instantiation */ }
+
+        public static Singleton getInstance() {
+            return INSTANCE;
+        }
+    }
+    ```
+
+    **Advantages:**
+    - One instance shared across the application conserves memory.
+    - Easy global access without passing the object through every call site.
+
+    **Pitfalls:**
+
+    1. **Concurrency:** Lazy initialization requires careful synchronization. A naïve double-checked locking (DCLP) implementation can fail due to instruction reordering. The initialization-on-demand holder idiom or an `enum` singleton are safer alternatives.
+    2. **Testability:** Tests that modify singleton state must reset it between runs, or subsequent tests may inherit corrupted state.
+    3. **Mocking difficulty:** If the singleton does not implement an interface, test doubles cannot be substituted via dependency injection.
+    4. **Hidden coupling:** Callers that access a singleton via its static `getInstance()` method carry an implicit, hard-coded dependency that is invisible in method signatures.
+
+    <Tip>
+      In Spring applications, Spring-managed beans are singletons by default within the application context, but they remain testable and mockable because they are injected through interfaces rather than accessed statically.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the Null Object pattern and when is it appropriate?">
+    The **Null Object pattern** replaces `null` references with a no-op object that conforms to the expected interface. Instead of scattering `null` checks throughout the codebase, callers always receive a valid object — it just does nothing.
+
+    ```java
+    // Without Null Object — null checks proliferate
+    public void doSomething(MyObject obj) {
+        if (obj == null) {
+            throw new Exception();
+        }
+        obj.doMethod();
+    }
+    ```
+
+    ```java
+    // With Null Object — no null check needed at call sites
+    interface MyObject {
+        void doMethod();
+    }
+
+    class MyNullObject implements MyObject {
+        @Override
+        public void doMethod() {
+            // Intentionally does nothing
+        }
+    }
+
+    class MyRealObject implements MyObject {
+        @Override
+        public void doMethod() {
+            System.out.println("Performing real work.");
+        }
+    }
+
+    public void doSomething(MyObject obj) {
+        obj.doMethod(); // safe regardless of which implementation is passed
+    }
+    ```
+
+    The pattern can be generalized to any "special case" scenario. For example, a `ZeroCapacityStack` can be used wherever a stack with no capacity is expected, rather than checking for a zero capacity each time.
+
+    **Trade-offs:**
+    - Eliminates repetitive null-check boilerplate and makes collaboration chains cleaner.
+    - Can suppress exceptions that would otherwise surface real bugs — if a null was unexpected, silently doing nothing may hide the problem.
+
+    <Warning>
+      Use the Null Object pattern only when "doing nothing" is a genuinely valid and expected behavior. If the absence of a real object should always be an error, throw an explicit exception rather than masking the issue.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is the CQRS pattern and what are its trade-offs?">
+    **Command Query Responsibility Segregation (CQRS)** separates the model used to mutate state (commands — e.g., cancel order, process payment) from the model used to read state (queries — e.g., fetch order details, list users).
+
+    A single resource like `Order` becomes two distinct models:
+    - `Order` — the command model, used by application logic to perform state changes.
+    - `OrderData` (or `OrderView`) — the query model, used by the presentation layer to render data.
+
+    **Advantages:**
+    - Each model can be optimized independently. The command model can use an ORM like JPA that excels at transactional domain modeling; the query model can use MyBatis or a raw SQL library optimized for complex joins and projections.
+    - Taken further, the command store can use a transactional RDBMS while the query store uses a read-optimized NoSQL database or a search index.
+    - Maintainability improves because read and write concerns no longer compete in the same class.
+
+    **Disadvantages:**
+    - Significantly more code: two models, two data access layers, and potentially two data stores.
+    - If command and query stores are separated, a synchronization mechanism (event-driven replication, CDC, etc.) is needed to propagate writes to the read side, introducing eventual consistency.
+    - The complexity overhead may not be worth it for simple CRUD applications.
+
+    <Note>
+      Carefully compare the cost of the complexity from a single model against the cost of maintaining two separate models before adopting CQRS. It pays off most in systems with very different read and write performance requirements, or complex domain models that conflict with efficient query shapes.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the Transactional Outbox pattern and why is it needed?">
+    In distributed systems, a service often needs to both persist data to a database and publish an event or message to an external system in the same logical operation. Doing these two things independently creates a **dual-write problem**: the database write and the event publish are not atomic, so one can succeed while the other fails.
+
+    ```java
+    // Problematic: transaction may commit but event publish may fail, or vice versa
+    @Transactional
+    public void propagateSample() {
+        Product product = new Product("New product");
+        productRepository.save(product);
+        eventPublisher.propagate(new NewProductEvent(product.getId())); // can fail independently
+    }
+    ```
+
+    **The Transactional Outbox pattern** solves this by writing the event as a record into an `outbox` table within the *same database transaction* as the business data. Because both writes are atomic, either both succeed or both fail.
+
+    ```java
+    @Transactional
+    public void propagateSample() {
+        Product product = new Product("New product");
+        productRepository.save(product);
+        // Write event to the outbox table in the same transaction
+        productOutboxRepository.save(new ProductEvent(product.getId()));
+    }
+    ```
+
+    A separate background process (a relay or a CDC connector such as Debezium) polls the outbox table and publishes any unpublished records to the message broker. The relay retries until the external publish succeeds, guaranteeing **at-least-once delivery**.
+
+    **Key guarantees:**
+    - No message is lost due to a database rollback — if the business operation fails, the outbox record is also rolled back.
+    - No phantom messages — if the event publish fails, the record remains in the outbox for the relay to retry.
+
+    <Note>
+      The trade-off is added infrastructure: the outbox table, the relay process, and eventual consistency between when the business transaction commits and when the event is delivered to consumers.
+    </Note>
+  </Accordion>
+</AccordionGroup>

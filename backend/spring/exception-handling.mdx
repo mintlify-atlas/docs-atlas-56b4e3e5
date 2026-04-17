@@ -1,0 +1,249 @@
+---
+title: "Spring Exception Handling Interview Q&A"
+description: "Interview questions on @ExceptionHandler, @ControllerAdvice, checked vs unchecked exceptions, and injecting properties with @Value."
+---
+
+Exception handling is a cross-cutting concern that touches every layer of a Spring application. Interview questions in this area assess whether a candidate knows the full resolution pipeline — from how `DispatcherServlet` delegates to `HandlerExceptionResolver`, to the scoping rules of `@ExceptionHandler` inside a single controller versus the global coverage of `@ControllerAdvice`. This page also covers the Java exception hierarchy (checked vs. unchecked), and the `@Value` annotation, which is grouped here because misunderstanding its injection semantics is a common source of subtle bugs.
+
+<AccordionGroup>
+  <Accordion title="What is @ExceptionHandler and how does it work?">
+    `@ExceptionHandler` is a Spring MVC annotation that designates a method as the handler for one or more specific exception types. It can be placed:
+
+    - **Inside a `@Controller` or `@RestController`** — handles exceptions thrown only by that controller.
+    - **Inside a `@ControllerAdvice` class** — handles exceptions globally across all controllers.
+
+    **How the resolution pipeline works:**
+
+    When an unhandled exception escapes a controller method, `DispatcherServlet` asks its registered `HandlerExceptionResolver` implementations (in priority order) to handle it. Spring registers three resolvers by default:
+
+    1. **`ExceptionHandlerExceptionResolver`** (highest priority) — checks whether the exception matches any `@ExceptionHandler` method in the current controller or in any `@ControllerAdvice` class.
+    2. **`ResponseStatusExceptionResolver`** — handles exceptions annotated with `@ResponseStatus`.
+    3. **`DefaultHandlerExceptionResolver`** — handles standard Spring MVC exceptions (e.g., `MethodArgumentNotValidException`, `NoHandlerFoundException`) and maps them to appropriate HTTP status codes.
+
+    If `ExceptionHandlerExceptionResolver` finds a matching handler, the exception is resolved **within Spring MVC** — it never propagates to the servlet container (Tomcat). This allows returning a structured error response rather than an HTML error page from the server.
+
+    ```java
+    @RestController
+    @RequestMapping("/api/orders")
+    public class OrderController {
+
+        @GetMapping("/{id}")
+        public OrderDto getOrder(@PathVariable Long id) {
+            return orderService.findById(id); // may throw OrderNotFoundException
+        }
+
+        // Handles OrderNotFoundException only for this controller
+        @ExceptionHandler(OrderNotFoundException.class)
+        @ResponseStatus(HttpStatus.NOT_FOUND)
+        public ErrorResponse handleNotFound(OrderNotFoundException ex) {
+            return new ErrorResponse("ORDER_NOT_FOUND", ex.getMessage());
+        }
+    }
+    ```
+
+    <Note>
+      The `@ExceptionHandler` method can accept the exception as a parameter, along with `HttpServletRequest`, `HttpServletResponse`, `WebRequest`, and others. The return type can be a `ResponseEntity<T>`, a view name, or any object annotated with `@ResponseBody`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is @ControllerAdvice and how does it differ from @RestControllerAdvice?">
+    `@ControllerAdvice` is a specialization of `@Component` that applies `@ExceptionHandler`, `@InitBinder`, and `@ModelAttribute` methods **globally** to all controllers in the application (or a filtered subset). Because it includes `@Component`, it is auto-detected by `@ComponentScan` and registered as a Spring bean.
+
+    It consolidates cross-controller concerns into a single class, eliminating the need to duplicate exception-handling logic in every controller.
+
+    ```java
+    @ControllerAdvice
+    public class GlobalExceptionHandler {
+
+        @ExceptionHandler(ResourceNotFoundException.class)
+        @ResponseStatus(HttpStatus.NOT_FOUND)
+        public ModelAndView handleNotFound(ResourceNotFoundException ex) {
+            ModelAndView mav = new ModelAndView("error/404");
+            mav.addObject("message", ex.getMessage());
+            return mav; // renders an HTML error view
+        }
+
+        @InitBinder
+        public void initBinder(WebDataBinder binder) {
+            // global binding configuration, e.g. date formats
+            binder.registerCustomEditor(LocalDate.class, new LocalDateEditor());
+        }
+    }
+    ```
+
+    **`@RestControllerAdvice`** is a convenience annotation that combines `@ControllerAdvice` and `@ResponseBody`. Every `@ExceptionHandler` method in the class automatically writes its return value as a JSON (or XML) response body — no need to add `@ResponseBody` to each method individually.
+
+    ```java
+    @RestControllerAdvice
+    public class GlobalRestExceptionHandler {
+
+        @ExceptionHandler(ResourceNotFoundException.class)
+        @ResponseStatus(HttpStatus.NOT_FOUND)
+        public ErrorResponse handleNotFound(ResourceNotFoundException ex) {
+            return new ErrorResponse("NOT_FOUND", ex.getMessage()); // serialized to JSON
+        }
+
+        @ExceptionHandler(MethodArgumentNotValidException.class)
+        @ResponseStatus(HttpStatus.BAD_REQUEST)
+        public ErrorResponse handleValidation(MethodArgumentNotValidException ex) {
+            String message = ex.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .map(e -> e.getField() + ": " + e.getDefaultMessage())
+                .collect(Collectors.joining(", "));
+            return new ErrorResponse("VALIDATION_FAILED", message);
+        }
+    }
+    ```
+
+    **Scoping `@ControllerAdvice` to a subset of controllers:**
+
+    ```java
+    // Apply only to controllers in the given package
+    @ControllerAdvice("com.example.api")
+    // Apply only to controllers annotated with @RestController
+    @ControllerAdvice(annotations = RestController.class)
+    // Apply only to a specific set of controller classes
+    @ControllerAdvice(assignableTypes = {OrderController.class, ProductController.class})
+    ```
+
+    <Tip>
+      For REST APIs, prefer `@RestControllerAdvice`. It produces JSON error responses consistently, and the `@ResponseBody` behavior is applied automatically to all handler methods in the class.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between Checked and Unchecked exceptions in Java?">
+    Java's exception hierarchy splits exceptions into two categories:
+
+    ```
+    Throwable
+    ├── Error               (unchecked — JVM-level, not recoverable)
+    └── Exception
+        ├── IOException     (checked)
+        ├── SQLException    (checked)
+        └── RuntimeException (unchecked)
+            ├── NullPointerException
+            ├── IllegalArgumentException
+            └── ...
+    ```
+
+    **Checked Exceptions**
+
+    - Verified at **compile time** — the compiler enforces that the caller either handles them with `try-catch` or declares them with `throws`.
+    - Represent *expected*, *recoverable* error conditions arising from interaction with external systems: file I/O, database connections, network calls.
+
+    ```java
+    // The compiler forces callers to acknowledge IOException
+    public String readFile(String path) throws IOException {
+        return Files.readString(Path.of(path));
+    }
+    ```
+
+    **Unchecked Exceptions (RuntimeException)**
+
+    - Verified at **runtime** only — no compile-time enforcement.
+    - Typically represent *programming errors*: null dereference, out-of-bounds array access, illegal arguments passed to a method.
+    - Spring conventions (and most modern Java code) prefer custom unchecked exceptions for domain errors, because checked exceptions propagate `throws` clauses through every layer and pollute interfaces.
+
+    ```java
+    // No need to declare — RuntimeException bubbles up automatically
+    public User findById(Long id) {
+        return userRepository.findById(id)
+            .orElseThrow(() -> new UserNotFoundException("User not found: " + id));
+    }
+    ```
+
+    **Error vs. Exception**
+
+    `Error` represents **JVM-level failures** (`OutOfMemoryError`, `StackOverflowError`) that are generally unrecoverable. Application code should not attempt to catch `Error`. `Exception`, by contrast, usually represents conditions the application *can* detect and respond to.
+
+    **When to use each:**
+
+    | Situation | Recommendation |
+    |---|---|
+    | File I/O, network calls, external API | Checked exception — callers should handle or propagate explicitly |
+    | Programming errors (null, bad index, invalid state) | Unchecked exception — these indicate bugs, not expected conditions |
+    | Domain/business rule violations | Unchecked exception in most modern Spring apps — avoids polluting every service method signature |
+  </Accordion>
+
+  <Accordion title="What are the key caveats when using @Value to inject configuration properties?">
+    `@Value` injects a single value from `application.properties` / `application.yml` (or any `Environment` source) into a Spring bean's field, constructor parameter, or setter.
+
+    ```java
+    @Component
+    public class PaymentConfig {
+        @Value("${payment.api.key}")
+        private String apiKey;
+
+        @Value("${payment.timeout-ms:5000}") // 5000 is the default
+        private int timeoutMs;
+    }
+    ```
+
+    **Three important caveats:**
+
+    **1. The class must be a Spring bean**
+
+    `@Value` is processed during dependency injection, which only happens for Spring-managed beans. If the class is not annotated with `@Component`, `@Service`, or similar, Spring never processes the annotation and the field remains `null` (or its default value).
+
+    ```java
+    // WRONG — plain Java class; @Value never fires
+    public class PaymentConfig {
+        @Value("${payment.api.key}")
+        private String apiKey; // always null
+    }
+
+    // CORRECT
+    @Component
+    public class PaymentConfig {
+        @Value("${payment.api.key}")
+        private String apiKey; // injected correctly
+    }
+    ```
+
+    **2. Choose the injection method carefully**
+
+    Field injection (`@Value` on a field) is concise but makes unit testing harder — you cannot set the value without Spring context or reflection. Constructor or setter injection is more testable:
+
+    ```java
+    @Component
+    public class MailService {
+        private final String smtpHost;
+
+        // Constructor injection — easy to test by passing the value directly
+        public MailService(@Value("${mail.smtp.host}") String smtpHost) {
+            this.smtpHost = smtpHost;
+        }
+    }
+    ```
+
+    **3. Property file location and precedence**
+
+    `application.yml` (or `application.properties`) must be on the classpath. When multiple property sources exist, Spring's property precedence order determines which value wins (environment variables > command-line args > `application.yml` > defaults).
+
+    **`@Value` vs. `@ConfigurationProperties`**
+
+    | | `@Value` | `@ConfigurationProperties` |
+    |---|---|---|
+    | Binds | A single value | A group of related values into a class |
+    | RelaxedBinding | No — property key must match exactly | Yes — `my-key`, `myKey`, `MY_KEY` all match `myKey` |
+    | Validation | Manual | Supports `@Validated` with JSR-303 annotations |
+    | Best for | Simple one-off injections | Structured configuration with multiple related fields |
+
+    ```java
+    // @ConfigurationProperties for a group of related settings
+    @ConfigurationProperties(prefix = "payment")
+    @Validated
+    public class PaymentProperties {
+        @NotBlank
+        private String apiKey;
+        private int timeoutMs = 5000;
+        // getters and setters
+    }
+    ```
+
+    <Tip>
+      Prefer `@ConfigurationProperties` over `@Value` when you have more than one or two related configuration values. It supports RelaxedBinding, validation, and IDE auto-completion via the Spring Configuration Processor.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

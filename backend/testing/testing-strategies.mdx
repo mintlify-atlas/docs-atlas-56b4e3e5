@@ -1,0 +1,406 @@
+---
+title: "Testing Strategies and Security Interview Q&A"
+description: "Key interview questions on unit and integration testing, TDD, test doubles, code coverage, test isolation, Micrometer, CSRF, JWT, and SQL injection."
+---
+
+A thorough understanding of testing strategies separates engineers who can ship confidently from those who rely on luck. Backend interviews in this area cover the full spectrum: the mechanics of unit and integration tests, the discipline of TDD, the vocabulary of test doubles, the nuances of code coverage metrics, and the practical challenges of keeping tests isolated. Security topics — CSRF, JWT, and SQL injection — round out the picture, since production software must also be correct against adversarial inputs. This page distills the most frequently asked questions from the Maeil Mail interview archive.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between unit tests, integration tests, and slice tests?">
+    **Unit tests** verify the smallest testable unit of code — typically a single method or class — in isolation. They run fast, have no external dependencies, and pinpoint exactly where a failure occurred. A good unit test exercises one behavior at a time.
+
+    **Integration tests** verify that multiple modules work correctly when combined. They involve real infrastructure: actual databases, real HTTP calls, real message brokers. They are slower and more complex to set up, but they catch bugs that unit tests miss — incorrect SQL, misconfigured transaction boundaries, serialization mismatches.
+
+    **Slice tests** (a Spring Boot concept) occupy the middle ground. They load only the slice of the application relevant to the layer under test, using a targeted set of Spring beans.
+
+    | Annotation | What it loads |
+    |---|---|
+    | `@WebMvcTest` | Controllers, filters, interceptors — no service or repository beans |
+    | `@DataJpaTest` | JPA repositories, entity manager — no web layer |
+    | `@JsonTest` | Jackson serialization/deserialization only |
+
+    Slice tests are faster than full `@SpringBootTest` because they skip unrelated infrastructure, while still exercising the layer's real behavior (e.g., actual SQL via an in-memory database for `@DataJpaTest`).
+
+    **Why write tests at all?**
+
+    - Catch bugs before they reach production.
+    - Enable confident refactoring — a passing suite means behavior is preserved.
+    - Speed up development over the long term by preventing regressions.
+    - Serve as living documentation of intended behavior.
+
+    <Tip>
+      Use unit tests for fast, isolated feedback on business logic. Use slice tests to validate a specific layer's integration. Reserve full integration tests for critical end-to-end paths where the complete stack interaction matters.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is Test-Driven Development (TDD)?">
+    **Test-Driven Development (TDD)** is a short, repeated development cycle:
+
+    1. **Red** — write a failing test that specifies the desired behavior.
+    2. **Green** — write the minimum production code required to make the test pass.
+    3. **Refactor** — clean up the code while keeping all tests green.
+
+    Key disciplines of the TDD cycle:
+
+    - Start with the simplest, most concrete case.
+    - Write only enough production code to make the currently failing test pass.
+    - As tests become more specific, production code becomes more general and covers more cases.
+    - Never write production code unless there is a failing test demanding it.
+    - Write only enough test code to demonstrate the failure — a compilation error counts.
+
+    Practicing this cycle consistently produces several benefits:
+
+    - **Reduced instability** — small, incremental changes make it easy to pinpoint the cause of a regression.
+    - **Emergent design** — code written to be testable tends to be loosely coupled; TDD nudges the design toward better separation of concerns.
+    - **Documented intent** — the test suite describes the expected behavior of the system in executable form.
+
+    <Warning>
+      TDD is not universally beneficial. Exploratory prototypes, UI-heavy code, and highly algorithmic problems are areas where writing tests first can slow progress without meaningful quality benefit. Apply TDD critically, not dogmatically.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are test doubles and what are the different kinds?">
+    When the real dependency of a unit under test is impractical to use — because it is slow, non-deterministic, has side effects, or is complex to configure — a **test double** is substituted in its place.
+
+    The five types of test doubles, ordered from simplest to most capable:
+
+    **Dummy** — an object that is passed around but never actually used. Its only purpose is to satisfy a parameter list.
+
+    ```java
+    // Dummy: the logger is required by the constructor but never called in this test
+    Logger dummyLogger = mock(Logger.class);
+    OrderService service = new OrderService(repository, dummyLogger);
+    ```
+
+    **Stub** — replaces a dependency with a simplified implementation that returns predefined responses. Stubs answer questions; they do not verify behavior.
+
+    ```java
+    // Stub: always returns a fixed order regardless of the argument
+    when(orderRepository.findById(1L)).thenReturn(Optional.of(sampleOrder));
+    ```
+
+    **Fake** — a lightweight, working implementation that is suitable for tests but not for production. An in-memory database is the canonical example.
+
+    ```java
+    // Fake: a real in-memory repository, not a mock
+    OrderRepository fakeRepository = new InMemoryOrderRepository();
+    ```
+
+    **Spy** — a real object (or stub) that also records how it was called. The recorded interactions can be inspected in assertions.
+
+    ```java
+    // Spy: real service, but tracks calls
+    OrderService spy = spy(new OrderService(repository));
+    service.placeOrder(request);
+    verify(spy).placeOrder(request); // verify interaction
+    ```
+
+    **Mock** — an object pre-programmed with expectations about which calls it should receive. If those expectations are not met, the mock throws an assertion error. A mock is both a stub (it returns configured values) and a spy (it records interactions).
+
+    ```java
+    // Mock: expects exactly one call to sendConfirmationEmail
+    EmailService mockEmail = mock(EmailService.class);
+    // ... exercise the unit under test ...
+    verify(mockEmail, times(1)).sendConfirmationEmail(anyString());
+    ```
+
+    <Note>
+      Prefer stubs and fakes for state-based assertions (did the system produce the right result?). Reserve mocks for interaction-based assertions (did the system call the right collaborator in the right way?). Over-reliance on mocks leads to fragile tests that break whenever an implementation detail changes.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is code coverage and does higher coverage always mean better tests?">
+    **Code coverage** measures the proportion of production code that is executed by the test suite. It is reported in several ways:
+
+    **Statement (line) coverage** — the fraction of source lines executed. The simplest metric: if 4 of 5 lines run, coverage is 80%.
+
+    **Decision (branch) coverage** — every branch of every conditional must evaluate to both `true` and `false` at least once. This is stricter than statement coverage.
+
+    ```java
+    // Decision coverage requires two test cases:
+    // one where (a > 0 && b > 0) is true, one where it is false
+    public void productionCode(int a, int b) {
+        if (a > 0 && b > 0) {
+            // branch A
+        }
+    }
+    ```
+
+    **Condition coverage** — each individual boolean operand within a condition must take both `true` and `false` values. In the example above, `a > 0` and `b > 0` must each be tested independently. Condition coverage can be satisfied without satisfying branch coverage.
+
+    | Input | `a > 0` | `b > 0` | Overall condition |
+    |---|---|---|---|
+    | `(1, 0)` | true | false | false |
+    | `(0, 1)` | false | true | false |
+
+    The two inputs above satisfy condition coverage — each operand has been true and false — but the overall branch is never `true`, so branch coverage is not satisfied.
+
+    **Does higher coverage guarantee better quality?**
+
+    No. Coverage tells you which lines were *executed*, not whether they were *verified correctly*. A test that calls a method but makes no assertions can achieve 100% line coverage while catching nothing. Coverage is a useful minimum bar — areas with zero coverage are certainly untested — but it is not a substitute for thoughtful test design.
+
+    <Warning>
+      Chasing a coverage target (e.g., 80%) can lead to tests written purely to execute code rather than to verify behavior. Focus on testing meaningful behavior, especially boundary conditions and error paths.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is test isolation and how is it achieved in Spring integration tests?">
+    **Test isolation** means each test runs independently and leaves no side effects that affect other tests. A test that depends on the order of execution or on the state left by a previous test is called **non-deterministic**: it may pass or fail depending on which other tests ran, in what order, and with what data.
+
+    Non-determinism makes failures difficult to diagnose — the root cause may be in a completely different test, not the one that is failing.
+
+    Three common isolation strategies in Spring:
+
+    **`@DirtiesContext`** — forces Spring to discard and rebuild the application context after the annotated test (or after each test method). This guarantees a completely fresh state.
+
+    ```java
+    @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
+    @SpringBootTest
+    class MyIntegrationTest {
+        // Each test gets a fresh application context
+    }
+    ```
+
+    Drawback: rebuilding the context is expensive. On large applications this can make the test suite very slow.
+
+    **`@Sql` with TRUNCATE** — runs a SQL script before (or after) each test to clear table data.
+
+    ```java
+    @Sql("/truncate.sql")
+    @SpringBootTest
+    class MyIntegrationTest {
+        // Tables are emptied before each test
+    }
+    ```
+
+    Drawback: the SQL script must be updated every time a new table is added.
+
+    **`@Transactional` rollback** — wraps each test in a transaction that is rolled back at the end, returning the database to its pre-test state.
+
+    ```java
+    @Transactional
+    @SpringBootTest
+    class MyIntegrationTest {
+        // Database changes are rolled back after each test
+    }
+    ```
+
+    Important caveats with `@Transactional`:
+
+    1. The test runs inside an open transaction, which may hide `LazyInitializationException` errors that would occur in production where no transaction is open (e.g., with OSIV disabled).
+    2. When `@SpringBootTest(webEnvironment = RANDOM_PORT)` is used, the servlet container runs in a separate thread — the test's transaction does not propagate there, so rollback does not apply.
+    3. Methods annotated with `PROPAGATION_REQUIRES_NEW` start their own transaction and are not rolled back with the test transaction.
+    4. `@Async` methods run in separate threads and are not covered by the test transaction rollback.
+
+    <Note>
+      Choose the isolation strategy that best fits the test scenario. `@Transactional` is the lightest option for most repository and service tests, but be aware of its blind spots. `@Sql` is more reliable for acceptance tests that drive the full stack via HTTP.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is Micrometer and how does it integrate with Spring Boot Actuator?">
+    **Micrometer** is a vendor-neutral application metrics instrumentation library. It provides a consistent API (modeled as a facade) for recording metrics — counters, timers, gauges, distribution summaries — and ships adapters that forward the recorded data to backend monitoring systems such as Prometheus, Datadog, Graphite, and others.
+
+    **Spring Boot Actuator and Micrometer**
+
+    Spring Boot Actuator exposes operational endpoints (`/actuator/health`, `/actuator/metrics`, etc.) and uses Micrometer internally to collect JVM, HTTP, and datasource metrics automatically. The relationship is:
+
+    - Actuator provides the management and monitoring endpoints.
+    - Micrometer collects the actual metric data and routes it to configured backends.
+
+    Adding `spring-boot-starter-actuator` and a Micrometer registry dependency (e.g., `micrometer-registry-prometheus`) is enough to expose standard metrics automatically.
+
+    **Custom metrics example**
+
+    ```java
+    @Service
+    public class CustomMetricsService {
+
+        private final Counter requestCounter;
+        private final Timer requestTimer;
+        private final CustomGauge customGauge;
+
+        public CustomMetricsService(MeterRegistry meterRegistry) {
+            // Count requests per endpoint
+            this.requestCounter = meterRegistry.counter(
+                "custom.requests.total", "endpoint", "/api/test");
+
+            // Measure processing duration per endpoint
+            this.requestTimer = meterRegistry.timer(
+                "custom.request.duration", "endpoint", "/api/test");
+
+            // Gauge: current active sessions (polled on demand)
+            this.customGauge = new CustomGauge();
+            Gauge.builder("custom.active.sessions", customGauge, CustomGauge::getActiveSessions)
+                 .tag("region", "us-east")
+                 .register(meterRegistry);
+        }
+
+        public void processRequest(Runnable requestLogic) {
+            requestCounter.increment();
+            requestTimer.record(requestLogic);
+        }
+
+        public void updateActiveSessions(int count) {
+            customGauge.setActiveSessions(count);
+        }
+
+        private static class CustomGauge {
+            private volatile double activeSessions = 0;
+            public double getActiveSessions() { return activeSessions; }
+            public void setActiveSessions(double v) { activeSessions = v; }
+        }
+    }
+    ```
+
+    **The three core meter types:**
+
+    - **Counter** — monotonically increasing value; use for "how many times did X happen?"
+    - **Timer** — records duration and count; use for "how long did X take?"
+    - **Gauge** — reports a current value at the moment of collection; use for "how many Y are active right now?"
+
+    <Tip>
+      Inject `MeterRegistry` directly into your Spring beans — it is auto-configured by Spring Boot when a Micrometer registry is on the classpath. Tags (labels) allow you to slice metrics by dimensions such as endpoint, status code, or region in your dashboard.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is CSRF and how can it be prevented?">
+    **Cross-Site Request Forgery (CSRF)** is an attack that tricks an authenticated user's browser into sending an unintended request to a web application. Because the browser automatically attaches cookies (including session cookies) to every request, the forged request appears legitimate to the server.
+
+    **How the attack works:**
+
+    1. The victim logs in to a web application. The server responds with a session cookie.
+    2. While still logged in, the victim visits an attacker-controlled page.
+    3. The malicious page contains a hidden request targeting the legitimate application — for example an `<img>` tag whose `src` triggers a state-changing action.
+
+    ```html
+    <!-- Hidden inside the attacker's page — triggers a password-change request -->
+    <img src="https://example.com/member/changePassword?newValue=1234" />
+    ```
+
+    4. The browser fires the request and automatically includes the victim's session cookie.
+    5. The server cannot distinguish this from a legitimate request.
+
+    **Defense mechanisms:**
+
+    **Referer header validation** — compare the `Referer` request header (which browser sends) against the `Host` header. Reject cross-origin requests. Limitation: the `Referer` header can be omitted or spoofed in some configurations.
+
+    **CSRF token** — generate a random token per session, store it server-side, and embed it in every form that triggers a state-changing action.
+
+    ```html
+    <input type="hidden" name="csrf_token" value="csrf_token_12341234" />
+    ```
+
+    On form submission, the server verifies that the submitted token matches the session's stored token. The attacker's page cannot read the token (due to the Same-Origin Policy), so it cannot forge a valid request.
+
+    **SameSite cookie attribute** — instruct the browser not to send the cookie on cross-site requests:
+
+    - `SameSite=Strict`: cookie is never sent on cross-site requests.
+    - `SameSite=Lax`: cookie is sent on top-level navigations (e.g., following a link) but not on cross-site sub-resource requests.
+    - `SameSite=None`: cookie is always sent (requires `Secure`).
+
+    **CORS policy** — configure the `Access-Control-Allow-Origin` header to permit only trusted origins. This prevents cross-origin JavaScript from reading responses but does not prevent simple cross-origin requests from being sent.
+
+    <Note>
+      Modern REST APIs that use token-based authentication (e.g., JWT in the `Authorization` header) rather than cookies are generally not vulnerable to CSRF, because attackers cannot add arbitrary request headers from a cross-origin page.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is JWT and what security considerations apply?">
+    **JSON Web Token (JWT)** is a compact, self-contained format for securely transmitting claims between parties. It is commonly used for authentication and authorization. A JWT consists of three Base64URL-encoded sections separated by dots:
+
+    - **Header** — token type and signing algorithm (e.g., `HS256`, `RS256`).
+    - **Payload** — claims: expiry (`exp`), user identity, roles, and any custom data.
+    - **Signature** — `HMAC(header + "." + payload, secretKey)` or an asymmetric signature. Verifies that the token was not tampered with.
+
+    **Advantages over session-based authentication:**
+
+    - Stateless: the server does not need a session store. Verification requires only the secret key (or public key).
+    - Works naturally across horizontally scaled services — no shared session storage is needed.
+    - Claims are embedded in the token, so user data does not need an additional database lookup per request.
+
+    **Security considerations:**
+
+    **Payload is not encrypted.** Base64URL decoding exposes the payload to anyone who has the token. Never store sensitive information (passwords, payment details) in a JWT payload.
+
+    **Weak secrets are brute-forceable.** Use a long, randomly generated secret key. Short or human-readable secrets are vulnerable to offline brute-force attacks against the signature.
+
+    **Token theft.** If a JWT is stolen, the attacker has access until it expires. Mitigations:
+    - Store tokens in `HttpOnly` cookies (not `localStorage`) to prevent XSS access.
+    - Use short-lived access tokens paired with a refresh token rotation strategy.
+    - Implement revocation via a token denylist for high-security scenarios.
+
+    **None algorithm attack.** An attacker may change the header's `alg` field to `"none"`, stripping the signature. A server that accepts `alg: none` will verify the token without checking the signature, allowing arbitrary payload manipulation.
+
+    ```json
+    // Tampered header — signature verification is skipped if the server accepts "none"
+    { "alg": "none", "typ": "JWT" }
+    ```
+
+    Always use a well-maintained JWT library that rejects the `none` algorithm by default, and explicitly whitelist only the algorithms your application supports.
+
+    **Token expiry and user experience.** Very short expiry forces frequent re-authentication, which can frustrate users. A sliding session or a refresh token scheme balances security and convenience.
+
+    <Warning>
+      Never trust the algorithm specified in the JWT header blindly. Configure your library to accept only the specific algorithms your application uses (e.g., `HS256` only), and ensure it rejects `none` and algorithm substitution attacks.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is SQL injection and how is it prevented?">
+    **SQL injection** is a vulnerability that occurs when user-supplied input is concatenated directly into a SQL query without sanitization. An attacker can terminate the intended query early and append their own SQL, bypassing authentication, reading unauthorized data, or destroying data.
+
+    **Vulnerable example:**
+
+    ```java
+    public boolean login(String username, String password) {
+        String sql = "SELECT * FROM users WHERE username = '" + username
+                   + "' AND password = '" + password + "'";
+
+        try (Connection conn = DriverManager.getConnection("url");
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            return rs.next();
+        } catch (SQLException e) {
+            throw new RuntimeException("Database error", e);
+        }
+    }
+    ```
+
+    If the attacker submits `admin' --` as the username, the executed query becomes:
+
+    ```sql
+    SELECT * FROM users WHERE username = 'admin' -- ' AND password = '...';
+    ```
+
+    The `--` starts a comment, so the password check is ignored. The attacker is authenticated as `admin`.
+
+    **Other common payloads:**
+
+    - `' OR '1'='1` — always-true condition that bypasses WHERE filters.
+    - `' UNION SELECT * FROM accounts --` — append results from another table.
+    - `'; DROP TABLE users; --` — destructive DDL injection.
+
+    **Prevention:**
+
+    1. **PreparedStatement with parameterized queries** — the driver escapes all user input before interpolating it into the query. This is the primary defense.
+
+    ```java
+    String sql = "SELECT * FROM users WHERE username = ? AND password = ?";
+    PreparedStatement pstmt = conn.prepareStatement(sql);
+    pstmt.setString(1, username);
+    pstmt.setString(2, password);
+    ResultSet rs = pstmt.executeQuery();
+    ```
+
+    2. **ORM frameworks** — JPA and Hibernate generate parameterized queries by default. JPQL and the Criteria API are both safe. Be careful with native query support (`@Query(nativeQuery = true)`) — parameterize those too.
+
+    3. **Input validation** — reject inputs that contain SQL metacharacters. This is a secondary defense layer, not a substitute for parameterized queries.
+
+    4. **Least-privilege database accounts** — the application's database user should have only the permissions it needs (SELECT/INSERT/UPDATE, not DROP or CREATE).
+
+    5. **Do not expose raw database error messages** — error messages can reveal table names, column names, and database type to an attacker. Log errors internally and return generic messages to clients.
+
+    <Note>
+      PreparedStatement (or an ORM) is the essential fix. Input validation and least-privilege access are defense-in-depth measures that reduce the impact if an injection point is overlooked.
+    </Note>
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,291 @@
+---
+title: "Functional Programming in JavaScript Interview Questions"
+description: "Pure functions, immutability, currying, iterables, and generators explained through real frontend interview questions from the Maeil Mail archive."
+---
+
+Functional programming (FP) is a paradigm that treats computation as the evaluation of pure functions while avoiding shared mutable state. JavaScript is a multi-paradigm language that supports FP natively through first-class functions, closures, array higher-order methods, and iterables. Interviewers use FP questions to assess whether a candidate understands code composition, side-effect management, and the reasoning behind modern patterns like hooks and immutable state management.
+
+<AccordionGroup>
+  <Accordion title="What is functional programming, and what are its core principles?">
+    Functional programming is a style of writing software that emphasises **what** to compute rather than **how** to compute it. It is built on two foundational ideas:
+
+    **1. Pure functions**
+
+    A pure function always returns the same output for the same input and produces no observable side effects (no I/O, no mutation of external state, no global variable changes).
+
+    ```javascript
+    // ✅ Pure function
+    function add(a, b) {
+      return a + b;
+    }
+
+    // ❌ Impure — depends on external state and causes a side effect
+    let total = 0;
+    function addToTotal(n) {
+      total += n; // mutates external variable
+      return total;
+    }
+    ```
+
+    **2. Immutability**
+
+    Instead of modifying existing data, FP creates new data structures with the desired changes. This makes programs easier to reason about because data cannot change under your feet.
+
+    ```javascript
+    const person = { name: 'Alice', age: 25 };
+
+    // ❌ Mutation — modifies the original
+    person.age = 26;
+
+    // ✅ Immutable update — produces a new object
+    const updatedPerson = { ...person, age: 26 };
+    console.log(person.age);        // 25 — unchanged
+    console.log(updatedPerson.age); // 26
+    ```
+
+    Additional FP techniques used in JavaScript include **higher-order functions**, **currying**, **function composition**, and **recursion**.
+
+    **Advantages of the functional style**
+    - **Maintainability** — declarative, side-effect-free code is easier to read and change.
+    - **Testability** — pure functions have no external dependencies, making unit tests trivial.
+    - **Concurrency safety** — immutable data avoids race conditions in parallel or async code.
+  </Accordion>
+
+  <Accordion title="What is currying, and how does it improve code reuse?">
+    **Currying** transforms a function that takes multiple arguments into a chain of functions that each take a single argument. Instead of `f(a, b, c)` you get `f(a)(b)(c)`.
+
+    ```javascript
+    // Without currying
+    function add(a, b) {
+      return a + b;
+    }
+    add(2, 3); // 5
+
+    // With currying
+    function add(a) {
+      return function (b) {
+        return a + b;
+      };
+    }
+
+    add(2)(3); // 5
+
+    const addTwo = add(2); // partially applied — reusable specialisation
+    addTwo(3);  // 5
+    addTwo(10); // 12
+    ```
+
+    **Reusability: filtering example**
+
+    Currying shines when you need the same logic with different "presets":
+
+    ```javascript
+    // ❌ Without currying — repetition
+    const numbers = [10, 20, 30, 40, 50];
+    const greaterThan30 = numbers.filter(n => n > 30);
+    const greaterThan20 = numbers.filter(n => n > 20);
+
+    // ✅ With currying — the predicate is reusable
+    const isGreaterThan = (min) => (value) => value > min;
+
+    const greaterThan30 = numbers.filter(isGreaterThan(30));
+    const greaterThan20 = numbers.filter(isGreaterThan(20));
+    ```
+
+    **Function composition with currying**
+
+    Single-argument (curried) functions slot naturally into `compose` and `pipe` utilities:
+
+    ```javascript
+    const add = a => b => a + b;
+    const square = x => x * x;
+    const toString = x => x.toString();
+
+    const pipe = (...fns) => input =>
+      fns.reduce((acc, fn) => fn(acc), input);
+
+    const process = pipe(
+      add(2),    // 3 + 2 = 5
+      square,    // 5 * 5 = 25
+      toString   // "25"
+    );
+
+    console.log(process(3)); // "25"
+    ```
+
+    <Note>
+      A potential downside of currying is reduced readability for developers unfamiliar with the pattern, and slightly harder stack traces when debugging deeply composed pipelines. Use it where the reuse benefit is clear.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the iterable protocol, and how do you implement a custom iterable?">
+    The **iterable protocol** defines a standard interface that allows any object to declare how it can be iterated. JavaScript's built-in iterables — arrays, strings, `Set`, `Map`, and others — all follow this protocol, which is why they all work with `for...of`, the spread operator `[...iterable]`, and destructuring.
+
+    **The rules:**
+    1. The object must have a method keyed by `Symbol.iterator`.
+    2. That method must return an **iterator** — an object with a `next()` method.
+    3. Each call to `next()` returns `{ value, done }`. When `done` is `true`, iteration ends.
+
+    ```javascript
+    const customIterable = {
+      data: [1, 2, 3],
+      [Symbol.iterator]() {
+        let index = 0;
+        return {
+          next: () => {
+            return index < this.data.length
+              ? { value: this.data[index++], done: false }
+              : { value: undefined, done: true };
+          },
+        };
+      },
+    };
+
+    for (const item of customIterable) {
+      console.log(item); // 1, 2, 3
+    }
+
+    console.log([...customIterable]); // [1, 2, 3]
+    ```
+
+    The iterable protocol is what makes `for...of` work uniformly across arrays, strings, generators, and any custom data structure you write. It decouples the iteration logic from the consumer of that logic.
+  </Accordion>
+
+  <Accordion title="What are generators, and what problems do they solve?">
+    A **generator** is a special function (declared with `function*`) that can be paused mid-execution and resumed later. Each `yield` expression produces a value and pauses the function until the caller calls `.next()` again.
+
+    ```javascript
+    function* myGenerator() {
+      yield 1;
+      yield 2;
+      yield 3;
+    }
+
+    const gen = myGenerator();
+    console.log(gen.next()); // { value: 1, done: false }
+    console.log(gen.next()); // { value: 2, done: false }
+    console.log(gen.next()); // { value: 3, done: false }
+    console.log(gen.next()); // { value: undefined, done: true }
+    ```
+
+    Calling `myGenerator()` does not run any code — it returns an **iterator** object. Execution only advances when you call `.next()`. The generator remembers all local state between calls.
+
+    **Practical use case: lazy filtering**
+
+    Generators are ideal for processing large collections without materialising the full result in memory:
+
+    ```javascript
+    function* validNumbers(numbers) {
+      for (const num of numbers) {
+        if (typeof num === 'number' && !isNaN(num)) {
+          yield num;
+        }
+      }
+    }
+
+    const mixed = [1, 'a', 2, NaN, 3, null, 4];
+
+    for (const n of validNumbers(mixed)) {
+      console.log(n); // 1, 2, 3, 4 — invalid values skipped lazily
+    }
+    ```
+
+    **Generator object: iterator and iterable**
+
+    A generator object is both an **iterator** (has `.next()`) and an **iterable** (has `[Symbol.iterator]()` that returns itself). This means generator objects work directly with `for...of`, spread, and destructuring.
+
+    ```javascript
+    function* range(start, end) {
+      for (let i = start; i <= end; i++) yield i;
+    }
+
+    console.log([...range(1, 5)]); // [1, 2, 3, 4, 5]
+    ```
+  </Accordion>
+
+  <Accordion title="What is immutability and why is it important in JavaScript?">
+    **Immutability** means that once data is created, it is never changed in place. Any "update" produces a new value, leaving the original intact.
+
+    Primitive values in JavaScript are always immutable — you cannot change the value `42` itself. Reference types (objects and arrays) are mutable by default, so deliberate effort is needed to maintain immutability.
+
+    ```javascript
+    const numbers = [1, 2, 3];
+
+    // ❌ Mutation — original array is modified
+    numbers.push(4);
+
+    // ✅ Immutable addition — new array, original unchanged
+    const newNumbers = numbers.concat(4);
+    // or: const newNumbers = [...numbers, 4];
+
+    console.log(numbers);    // [1, 2, 3]
+    console.log(newNumbers); // [1, 2, 3, 4]
+    ```
+
+    **Tools for immutable updates:**
+
+    ```javascript
+    const state = { user: 'Alice', score: 10 };
+
+    // Spread operator
+    const newState = { ...state, score: 20 };
+
+    // Object.assign
+    const newState2 = Object.assign({}, state, { score: 20 });
+
+    // Object.freeze (shallow — prevents any mutation)
+    const frozen = Object.freeze({ x: 1, y: 2 });
+    frozen.x = 99; // silently ignored (throws in strict mode)
+    ```
+
+    **Why bother, given the memory cost?**
+
+    The extra allocation is negligible in practice, and the benefits are substantial:
+    - **Predictability** — data flows in one direction; you always know what a variable holds.
+    - **Change tracking** — frameworks like React rely on reference equality checks (`prevState === nextState`) to efficiently detect changes. Mutation breaks this.
+    - **Debugging** — with immutable updates, you can snapshot state at any point and replay it — a feature exploited by Redux DevTools' time-travel debugging.
+
+    <Tip>
+      `Object.freeze` is **shallow** — nested objects are not frozen. For deep immutability, use a library like Immer, or recursively freeze nested objects.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between undefined and null, and how do they relate to memory?">
+    Both represent "no value," but they differ in **who assigns them and why**.
+
+    | | `undefined` | `null` |
+    |-|-------------|--------|
+    | Set by | JavaScript engine (automatically) | Developer (intentionally) |
+    | Meaning | Value not yet assigned | Intentional absence of a value |
+    | `typeof` | `"undefined"` | `"object"` (legacy quirk) |
+    | Loose equality | `undefined == null` → `true` | `null == undefined` → `true` |
+    | Strict equality | `undefined === null` → `false` | `null === undefined` → `false` |
+
+    ```javascript
+    let a;           // undefined — declared but not assigned
+    let b = null;    // null — explicitly set to "no value"
+
+    console.log(a == b);  // true  (loose)
+    console.log(a === b); // false (strict)
+    ```
+
+    **Memory implications**
+
+    Setting a variable to `null` explicitly breaks the reference to whatever object it was holding. The garbage collector can then reclaim that object's memory.
+
+    ```javascript
+    let data = fetchLargeDataset(); // large object on the heap
+    processData(data);
+
+    data = null; // reference dropped — GC can now collect the object
+    ```
+
+    Setting a variable to `undefined` does not signal to the GC that memory should be freed — it simply means the variable holds the value `undefined`.
+
+    In functional code, using `null` to explicitly clear state is preferable to relying on `undefined` because `null` communicates developer intent.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Functional programming concepts like pure functions, immutability, and function composition are not just academic — they are the foundation of React's component model, Redux's state management pattern, and modern array processing with `map`, `filter`, and `reduce`. Interviewers often connect FP questions directly to real-world framework choices.
+</Note>

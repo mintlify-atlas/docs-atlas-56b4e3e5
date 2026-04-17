@@ -1,0 +1,221 @@
+---
+title: 'Testing & Code Quality: Interview Q&A Archive'
+description: 'Frontend interview Q&A on E2E testing, TDD, testable code, cohesion and coupling, web accessibility, and real-world production problem-solving.'
+---
+
+Code quality and testing discipline are among the most reliable signals of engineering maturity, and interviewers probe this area deeply. This page covers the questions you are most likely to encounter — from the mechanics of TDD to the principles of cohesion and coupling, from accessibility fundamentals to pragmatic strategies for dealing with slow APIs and buggy third-party libraries.
+
+<AccordionGroup>
+  <Accordion title="What is E2E testing and how does it complement unit testing?">
+    End-to-end (E2E) testing simulates a real user moving through the application — clicking buttons, filling forms, navigating between pages — to verify that the entire system works together as expected. Unlike unit tests, which check individual functions in isolation, E2E tests exercise every layer of the stack simultaneously: the UI, client-side routing, API calls, and rendering.
+
+    **What unit tests miss**
+
+    A unit test can confirm that a login function correctly validates credentials and returns a token. But it cannot verify that, after login, the browser redirects to the dashboard, the session cookie is stored, or the user's name appears in the header. These are integration-level concerns that only E2E tests catch.
+
+    **Why both are necessary**
+
+    | | Unit tests | E2E tests |
+    |---|---|---|
+    | Speed | Fast (milliseconds) | Slow (seconds per test) |
+    | Scope | Single function or component | Full user flow |
+    | Maintenance | Low | Higher |
+    | Failure diagnosis | Precise | Sometimes vague |
+    | Best for | Logic correctness | Critical user journeys |
+
+    Use unit tests to cover logic exhaustively and keep feedback loops fast. Use E2E tests for the handful of flows that are absolutely critical — login, checkout, core user actions — where a regression would be immediately visible to users. Popular E2E tools include **Cypress** and **Playwright**.
+
+    <Note>
+      A common mistake is over-investing in E2E tests because they feel "more realistic." They are slow, flaky under CI timing constraints, and expensive to maintain. A healthy test suite is shaped like a pyramid: many unit tests, a moderate number of integration tests, and few E2E tests.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is TDD (Test-Driven Development)?">
+    TDD is a development methodology where tests are written *before* the production code they verify. The cycle has three phases:
+
+    **Red → Green → Refactor**
+
+    1. **Red** — Write a test for a feature that does not exist yet. The test fails (red) because there is no implementation.
+    2. **Green** — Write the minimum code needed to make the test pass. Do not over-engineer; just make it pass.
+    3. **Refactor** — Improve the code's structure, readability, or performance without changing its behavior. The existing test suite guards you against regressions.
+
+    This cycle repeats for every new behavior you add.
+
+    **Benefits**
+
+    - **Shorter debugging cycles** — automated tests narrow the failing scope immediately, so you rarely spend time hunting for a bug that could have been caught by a test.
+    - **Safer refactoring** — the test suite acts as a safety net, giving you confidence that structural changes do not break existing behavior.
+    - **Better design** — writing a test before the code forces you to think about the interface before the implementation. Code that is easy to test tends to have better separation of concerns.
+
+    <Tip>
+      TDD has an upfront cost. Writing tests first is slower at the start, but the long-term payoff in reduced bug rates and easier refactoring typically makes the investment worthwhile on any codebase you expect to maintain for more than a few months.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What conditions make code easy to test?">
+    Testability is not a property you bolt on later — it emerges from how code is designed. Three characteristics consistently produce testable code:
+
+    **1. Pure functions**
+
+    A pure function always returns the same output for the same input and has no side effects. It does not mutate global state, trigger network calls, or touch the DOM. Pure functions are trivially testable because they are entirely self-contained:
+
+    ```typescript
+    // Easy to test: no side effects, deterministic output
+    function add(a: number, b: number): number {
+      return a + b;
+    }
+
+    // Hard to test: depends on external state and has a side effect
+    function addAndLog(a: number, b: number): number {
+      const result = a + b;
+      console.log(result);       // side effect
+      globalTotal += result;     // mutation
+      return result;
+    }
+    ```
+
+    **2. Single responsibility**
+
+    A function that fetches data *and* transforms it *and* renders it into the DOM is almost impossible to test cleanly. Each concern must be tested in a different way, and a failure in any one of them breaks the test. Separating these concerns lets you test each in isolation.
+
+    **3. Predictability**
+
+    Code whose behavior depends on implicit global state, random values, or the current time is unpredictable and therefore hard to test reliably. Inject dependencies (a clock, a random number generator, a data source) rather than hardcoding them, so tests can control them.
+
+    **A note on test-driven design changes**
+
+    If writing a test for a piece of code feels unusually painful, that is a signal — not an excuse to skip the test, but an indication that the code's design has a problem. Tight coupling and over-stuffed functions are the usual culprits.
+
+    <Warning>
+      Do not make private methods public just to test them, and do not add test-only code paths to production code. These practices degrade the design. Address the underlying design problem instead.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are cohesion and coupling, and why do they matter?">
+    These two concepts are the foundational vocabulary of software design quality.
+
+    **Coupling** measures how much one module depends on the internals of another. High coupling means a change in one module ripples through others, making the system fragile and hard to change.
+
+    **Cohesion** measures how tightly focused a module's responsibilities are. High cohesion means everything inside a module belongs together and serves a single clear purpose.
+
+    The two properties tend to be inversely related: modules with high cohesion tend to have low coupling, and vice versa. The goal of good design is **low coupling and high cohesion**.
+
+    **Concrete example**
+
+    Consider a single file that handles user authentication *and* database access. That file has low cohesion — two unrelated concerns share the same unit. It likely also has high coupling — authentication logic directly calls database functions, so a schema change breaks the auth flow.
+
+    Separating concerns fixes both:
+
+    ```
+    auth.ts       ← authentication logic only
+    database.ts   ← data access only
+    ```
+
+    Now each module has a single, well-defined responsibility (high cohesion), and they communicate through a stable interface rather than direct internal access (low coupling).
+
+    **Practical heuristics**
+
+    - If a module is hard to name with a single noun or verb phrase, it probably does too much.
+    - If changing a module requires changing several unrelated others, coupling is too high.
+    - If a module is difficult to reuse in a different context, its dependencies are probably too concrete.
+  </Accordion>
+
+  <Accordion title="What is web accessibility and how do you improve it?">
+    Web accessibility ensures that all users — including those with visual, auditory, motor, or cognitive disabilities — can use your application. It is not a special feature for edge-case users; it is a baseline requirement for inclusive product design.
+
+    Think of it as the digital equivalent of a wheelchair ramp: the ramp is not just for wheelchair users — it also helps cyclists, delivery workers, and parents with prams. Similarly, accessibility improvements tend to benefit all users (better keyboard navigation, clearer visual hierarchy, faster screen reader performance).
+
+    **Key techniques**
+
+    **Semantic HTML** — Use elements for their intended purpose. A `<button>` is keyboard-focusable and communicates its role to assistive technologies by default. A `<div>` with an `onClick` handler does neither.
+
+    ```html
+    <!-- Inaccessible -->
+    <div onclick="submit()">Submit</div>
+
+    <!-- Accessible -->
+    <button type="submit">Submit</button>
+    ```
+
+    **ARIA attributes** — When semantic HTML is insufficient (custom widgets, dynamic content), ARIA roles and properties let you communicate semantics to screen readers:
+
+    ```html
+    <div role="alert" aria-live="polite">
+      Form submitted successfully.
+    </div>
+    ```
+
+    **Keyboard navigation** — All interactive elements must be reachable and operable via keyboard alone. Ensure logical tab order and visible focus indicators. Never suppress the focus outline without providing a replacement.
+
+    **Realistic expectations**
+
+    Full accessibility coverage across all disability types is an ongoing process, not a checkbox exercise. A pragmatic approach is to test your application with a screen reader (VoiceOver, NVDA), identify the most impactful gaps, and address them incrementally. Automated tools like axe or Lighthouse can surface many common issues quickly.
+  </Accordion>
+
+  <Accordion title="How do you handle a backend API that responds too slowly?">
+    Slow API responses are a cross-functional problem that requires both technical mitigation and clear stakeholder communication.
+
+    **Step 1: Gather objective data**
+
+    Before raising the issue, collect concrete measurements. Use the browser DevTools Network tab to record response times, or pull data from a monitoring tool (Sentry, Datadog, New Relic). "This endpoint averages 3.2 seconds" is a much more actionable report than "the API is slow."
+
+    Share this data with backend colleagues and frame the request around specific APIs and SLA expectations. Objective numbers reduce defensiveness and speed up resolution.
+
+    **Step 2: Apply frontend-side mitigations**
+
+    If backend improvements will take time, several techniques keep the experience acceptable:
+
+    - **Loading indicators** — A spinner or skeleton UI signals to users that the system is working, which significantly reduces perceived wait time and prevents the "is this broken?" question.
+
+    - **Prefetching** — Request data before the user explicitly asks for it. For example, start fetching the next page's data when the user hovers over a navigation link, or prefetch a page's data while the previous page is still loading.
+
+    - **Caching** — Libraries like React Query and SWR cache API responses and serve them instantly on subsequent requests, falling back to a background refresh. This eliminates redundant network round-trips for data that changes infrequently.
+
+    ```typescript
+    // React Query — stale-while-revalidate caching
+    const { data } = useQuery({
+      queryKey: ['user', userId],
+      queryFn: () => fetchUser(userId),
+      staleTime: 30_000, // serve cached data for 30 seconds
+    });
+    ```
+
+    <Note>
+      Skeleton UIs are generally more effective than spinners at reducing perceived wait time because they give users a sense of the content's structure before it arrives.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How do you handle a bug in a third-party library?">
+    Third-party library bugs are stressful precisely because the fix is outside your direct control. A methodical approach minimizes impact and keeps the project moving.
+
+    **1. Confirm the root cause**
+
+    Before concluding the library is at fault, rule out misuse. Check the library's documentation, changelog, and GitHub issues. Determine whether the problem appeared after a version bump (check `git diff package-lock.json`). Reproduce the issue in a minimal setup to confirm it is not caused by your code.
+
+    **2. Assess the impact and find a workaround**
+
+    Quantify what is broken for users. Then look for a temporary workaround:
+
+    - **CSS bug** — override the affected styles directly.
+    - **Behavior bug** — wrap the library's API and apply a correction inside the wrapper.
+    - **Critical functionality missing** — evaluate a drop-in replacement library or implement the affected behavior directly.
+
+    If a deploy deadline is imminent, a working workaround is more valuable than the perfect fix.
+
+    **3. Communicate proactively**
+
+    If resolution will take days rather than hours, inform stakeholders (PM, QA, team lead) with a clear summary: what is affected, what the workaround is, and the estimated timeline. This prevents surprises and allows the release schedule to be adjusted if necessary.
+
+    **4. Pursue a long-term fix**
+
+    Once the immediate pressure is off:
+
+    - File a detailed bug report on the library's GitHub repository with a reproducible example.
+    - If you can identify the fix, open a pull request.
+    - If the library is unmaintained or the fix cannot wait, fork the repository, apply the patch, and publish the fork under a scoped package name. Document this arrangement clearly so it can be reverted when the upstream fix ships.
+
+    <Warning>
+      If you fork a library to patch it, document the change and set a reminder to revisit it when the upstream fix is released. Forked dependencies accumulate silently and create long-term maintenance debt.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

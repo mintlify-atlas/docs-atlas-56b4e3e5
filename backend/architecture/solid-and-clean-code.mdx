@@ -1,0 +1,322 @@
+---
+title: "SOLID Principles and Clean Code Interview Q&A"
+description: "SOLID principles, cohesion vs coupling, dependency injection, layered architecture, and clean code patterns — backend interview Q&A from Maeil Mail."
+---
+
+Writing code that is easy to change is the central challenge of software engineering. Interviewers explore this space by asking about SOLID principles, cohesion and coupling, dependency injection, and cleaner idioms like first-class collections and Java Records. These questions probe whether a candidate can design systems that remain maintainable as requirements evolve, not just systems that work today. This page consolidates the most commonly asked clean-code and architecture questions from the Maeil Mail interview archive.
+
+<AccordionGroup>
+  <Accordion title="What are the SOLID principles?">
+    SOLID is an acronym for five object-oriented design principles that, together, guide how to manage dependencies so that code remains easy to extend and modify.
+
+    **S — Single Responsibility Principle (SRP)**
+
+    A class should have exactly one reason to change. "Responsibility" here is not the number of methods, but the set of stakeholders or requirements whose changes would force the class to be updated. Keeping responsibilities separate limits the scope of change and makes each class easier to understand.
+
+    **O — Open-Closed Principle (OCP)**
+
+    Software entities should be open for extension but closed for modification. Adding a new behavior means adding a new type (a new implementation of an existing interface), not editing the existing code. This keeps upper-level modules stable while lower-level behavior evolves.
+
+    > *How can you design for extension when you can't predict the future?* Ship the simplest thing that satisfies the current requirement. When the first change request arrives, use it to identify the axis of variation, then introduce an abstraction that shields existing code from future changes along that axis.
+
+    **L — Liskov Substitution Principle (LSP)**
+
+    A subtype must be substitutable for its supertype without altering the correctness of the program. Concretely, subclasses must honor the behavioral contract the parent advertises — preconditions cannot be strengthened, postconditions cannot be weakened. Violating LSP makes polymorphism unreliable and forces callers to do type-checking, which undermines OCP.
+
+    **I — Interface Segregation Principle (ISP)**
+
+    Clients should not be forced to depend on interfaces they do not use. Fat interfaces create unnecessary coupling: a change to an unused method still recompiles (or redeploys) every client. Split interfaces so that each client depends only on the methods it actually calls.
+
+    **D — Dependency Inversion Principle (DIP)**
+
+    High-level modules should not depend on low-level modules. Both should depend on abstractions. This means high-level policy code defines the interface it needs; low-level implementation code satisfies it. DIP is what enables OCP: when the low-level module can be swapped without touching the high-level module, extension requires no modification.
+
+    <Note>
+      The five principles are interconnected. DIP enables OCP; LSP makes polymorphism safe so that OCP can be applied reliably; ISP keeps abstractions focused so DIP doesn't create bloated dependency contracts.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between cohesion and coupling?">
+    **Cohesion** measures how closely related the elements inside a module are. A highly cohesive module has elements that all contribute to a single, well-defined purpose. When an object uses all of the data it holds, or when a change to a single feature touches only one module, cohesion is high.
+
+    **Coupling** measures the degree of dependency between modules — how much one module needs to know about another. When changing one module requires changing another, coupling is high.
+
+    Good design aims for **high cohesion and low coupling**. These two goals reinforce each other: when a class is cohesive (focused on one thing), it tends to expose a minimal interface, which limits what other classes need to know about it.
+
+    **The role of encapsulation**
+
+    Encapsulation is the mechanism that drives both goals simultaneously. Hiding an object's internal state behind a stable interface prevents implementation details from leaking out. Callers interact only with the interface, so internal changes do not ripple outward (low coupling). At the same time, the object controls all access to its own data, making it the natural home for related behavior (high cohesion).
+
+    ```java
+    // Weak encapsulation — internal state leaks, callers couple to implementation details
+    public class ShoppingCart {
+        public List<Item> items = new ArrayList<>(); // public mutable field
+    }
+
+    // Strong encapsulation — internal representation is hidden
+    public class ShoppingCart {
+        private final List<Item> items = new ArrayList<>();
+
+        public void add(Item item) { items.add(item); }
+        public BigDecimal total() {
+            return items.stream()
+                        .map(Item::price)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+        public List<Item> snapshot() { return Collections.unmodifiableList(items); }
+    }
+    ```
+
+    <Tip>
+      Before reaching for cohesion and coupling metrics, focus on encapsulation first. Encapsulation naturally pulls cohesion up and coupling down.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is dependency injection and what injection styles are available?">
+    When object A needs object B to do its work, a dependency exists from A to B. **Dependency injection (DI)** means that rather than having A create B itself, an external third party C creates B and hands it to A.
+
+    This matters for flexibility: when A creates its own B, it is tightly coupled to B's concrete type. When C provides B, A can be decoupled from B's implementation — accepting an interface — making it easy to substitute different implementations without changing A.
+
+    **Three injection styles**
+
+    **Constructor injection** — the dependency is supplied via the constructor. This is the most common recommendation because it guarantees the object is fully initialized at construction time, makes dependencies visible in the API, and plays well with immutability.
+
+    ```java
+    public class OrderService {
+        private final PaymentGateway paymentGateway;
+
+        public OrderService(PaymentGateway paymentGateway) {
+            this.paymentGateway = paymentGateway;
+        }
+    }
+    ```
+
+    **Setter injection** — the dependency is supplied through a setter method after construction. Useful when the dependency is optional or when circular dependencies make constructor injection impossible. A risk is that the object can be in a partially initialized state between construction and the setter call.
+
+    ```java
+    public class ReportService {
+        private Formatter formatter;
+
+        public void setFormatter(Formatter formatter) {
+            this.formatter = formatter;
+        }
+    }
+    ```
+
+    **Method injection** — the dependency is passed directly to the method that needs it. Best for dependencies that change per invocation — when the caller needs to vary the collaborator on each call.
+
+    ```java
+    public void process(Runnable task, ExecutorService executor) {
+        executor.submit(task);
+    }
+    ```
+
+    <Note>
+      There is no single universally correct style. Constructor injection is the default recommendation, but the right choice depends on the use case and team conventions. When in doubt, prefer constructor injection: it makes dependencies explicit and supports immutability.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is layered architecture and what is the sinkhole anti-pattern?">
+    **Layered architecture** organizes software into horizontal layers, each responsible for a distinct concern. A classic three-layer structure:
+
+    - **Presentation Layer** — processes user input; contains controllers and view models.
+    - **Domain / Service Layer** — contains business logic and orchestrates the domain model.
+    - **Data Source Layer** — handles database access, queries, and data manipulation.
+
+    Each layer depends only on the layer directly below it. This separation means that a layer can be independently extended, tested, or replaced without affecting the others.
+
+    **Sinkhole anti-pattern**
+
+    A sinkhole occurs when a middle layer adds no value — it receives a request and immediately delegates it unchanged to the layer below.
+
+    ```java
+    @Service
+    public class OrderService {
+
+        private final OrderDao orderDao;
+
+        // Sinkhole: no business logic, just passes through
+        public OrderResponse getOrder(Long orderId) {
+            return orderDao.getOrderById(orderId);
+        }
+    }
+    ```
+
+    This wastes CPU and memory routing through an empty layer and pollutes the codebase with meaningless boilerplate.
+
+    <Warning>
+      Sinkhole code is not always wrong. Skipping layers can reduce consistency and create implicit expectations that are hard to document. If you allow the presentation layer to call the data layer directly in some cases, agree on a clear team convention so the deviation is intentional, not accidental.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is a first-class collection and why use one?">
+    A **first-class collection** is a class whose sole field is a collection. All business logic related to that collection lives inside the class rather than scattered across service or utility classes.
+
+    ```java
+    public class Orders {
+
+        private final List<Order> orders;
+
+        public Orders(List<Order> orders) {
+            validate(orders); // validation is centralized here
+            this.orders = new ArrayList<>(orders);
+        }
+
+        public void add(Order order) {
+            if (order == null) {
+                throw new IllegalArgumentException("Order cannot be null.");
+            }
+            orders.add(order);
+        }
+
+        public List<Order> getAll() {
+            return Collections.unmodifiableList(orders); // defensive copy
+        }
+
+        public double getTotalAmount() {
+            return orders.stream()
+                         .mapToDouble(Order::getAmount)
+                         .sum();
+        }
+    }
+    ```
+
+    ```java
+    public class OrderService {
+
+        private final Orders orders = new Orders(new ArrayList<>());
+
+        public void addOrder(Order order) {
+            orders.add(order);
+        }
+
+        public Orders getOrders() {
+            return orders;
+        }
+    }
+    ```
+
+    **Why use a first-class collection?**
+
+    - **Encapsulation** — unnecessary collection APIs (sort, remove, clear) are not exposed to callers.
+    - **Expressiveness** — a type named `Orders` communicates intent far better than `List<Order>`.
+    - **Centralized validation and invariants** — the collection's rules live in one place; they cannot be bypassed.
+    - **Immutability support** — returning `Collections.unmodifiableList` or a defensive copy prevents callers from mutating the internal state.
+  </Accordion>
+
+  <Accordion title="What is a Java Record and when should it be used as a DTO?">
+    A **Record** (introduced as a standard feature in Java 16) is a special class type where all fields are implicitly `final`. The compiler automatically generates a canonical constructor, accessors, `equals()`, `hashCode()`, and `toString()`.
+
+    ```java
+    // Traditional class — boilerplate constructor, getters, equals, hashCode, toString
+    public class MemberDto {
+        private final String name;
+        private final String email;
+        private final int age;
+
+        public MemberDto(String name, String email, int age) {
+            this.name = name;
+            this.email = email;
+            this.age = age;
+        }
+
+        public String getName() { return name; }
+        public String getEmail() { return email; }
+        public int getAge() { return age; }
+        // equals, hashCode, toString omitted for brevity
+    }
+
+    // Equivalent Record — all of the above generated automatically
+    public record MemberDto(String name, String email, int age) {}
+    ```
+
+    **Are all Records DTOs?**
+
+    No. A Record is a language construct that enforces immutability and value-based equality. Its purpose determines its category:
+
+    - **DTO (Data Transfer Object):** carries data between layers (e.g., controller to service, API response). No domain logic.
+    - **Value Object (VO):** represents a domain concept (e.g., `Coordinates`, `Money`). May contain domain rules and behavior.
+
+    ```java
+    // Value Object use case
+    public record Coordinates(double x, double y) {}
+    ```
+
+    **Record vs. Value Object comparison**
+
+    | | Record | Value Object |
+    |---|---|---|
+    | Immutability | Always (compiler-enforced) | By convention |
+    | Value equality | Always (compiler-generated) | Required |
+    | Domain logic | Not recommended | Can and often does contain it |
+    | Inheritance | Cannot extend another class | No restriction in principle |
+
+    **Limitations of Records:**
+    - Cannot extend another class (implicitly extends `java.lang.Record`).
+    - Because fields are `final`, they are not suited for entities that evolve over their lifecycle.
+    - Not compatible with Java versions prior to 14 (preview) or 16 (stable).
+  </Accordion>
+
+  <Accordion title="What is functional programming and how does it relate to OOP?">
+    **Functional programming (FP)** is a programming paradigm that builds programs by composing pure functions and minimizing mutable state. It is not in opposition to object-oriented programming — the two can complement each other within the same codebase.
+
+    - OOP manages complexity by encapsulating moving parts inside objects.
+    - FP manages complexity by minimizing moving parts through immutability and pure functions.
+
+    **Side effects**
+
+    A side effect is any observable change a function causes beyond returning its result — modifying a variable, writing to disk, printing output, making a network call. Functions with many side effects are harder to reason about and harder to test.
+
+    **Pure functions**
+
+    A pure function always produces the same output for the same input and has no side effects. Pure functions are the composable building blocks of functional programming.
+
+    ```java
+    // Impure — has side effects; hard to reuse for different ranges or operations
+    int sum() {
+        int sum = 0;
+        for (int i = 1; i <= 100; i++) {
+            sum += i;
+        }
+        return sum;
+    }
+    ```
+
+    **Function composition**
+
+    When the output type of function A matches the input type of function B, A and B can be composed: `B(A(...))`. In practice this means factoring shared looping logic into a generic higher-order function and passing the specific operation as a lambda.
+
+    ```java
+    class FunctionCompositionExample {
+
+        // Sum of 1..100
+        private int sum() {
+            return loop((a, b) -> a + b, 0, range(1, 100));
+        }
+
+        // Product of 1..n (factorial)
+        private int factorial(int n) {
+            return loop((a, b) -> a * b, 1, range(1, n));
+        }
+
+        // Generic accumulate — the operation is injected as a pure function
+        private int loop(BiFunction<Integer, Integer, Integer> fn,
+                         int identity,
+                         Queue<Integer> queue) {
+            if (queue.isEmpty()) return identity;
+            return loop(fn, fn.apply(identity, queue.poll()), queue);
+        }
+
+        private Queue<Integer> range(int start, int end) {
+            return IntStream.rangeClosed(start, end)
+                            .boxed()
+                            .collect(Collectors.toCollection(LinkedList::new));
+        }
+    }
+    ```
+
+    <Tip>
+      Java's `Stream` API, lambdas, and method references are the idiomatic way to apply functional ideas in Java. Even in a predominantly OOP codebase, using `map`, `filter`, `reduce`, and pure helper methods can significantly reduce the cognitive load of data transformation code.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

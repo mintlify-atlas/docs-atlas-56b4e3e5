@@ -1,0 +1,204 @@
+---
+title: 'Database design: replication, normalization, and storage'
+description: 'Database architecture topics from the Maeil Mail archive: replication, relational vs. NoSQL, normalization, column vs. row stores, soft delete, and NoSQL types.'
+---
+
+Database design choices made early in a project tend to have long-lasting consequences. Picking the right storage model, structuring tables to avoid anomalies, and planning for scale through replication or denormalization are decisions that come up in system design interviews as often as they come up in production. This section covers the foundational design questions from the Maeil Mail backend archive.
+
+<AccordionGroup>
+  <Accordion title="What is database replication and how does MySQL binary logging work?">
+    Database replication is the process of continuously copying data from a **source** server to one or more **replica** servers. Replication is used to achieve high availability (if the source fails, a replica can take over), geographic distribution (replicas closer to users reduce read latency), and read scaling (directing read queries to replicas reduces load on the source).
+
+    In MySQL, replication is driven by the **binary log (binlog)** — a record of every data-modifying statement executed on the source. Replicas read the binlog and replay the changes. MySQL supports three binary log formats:
+
+    **Row-based logging** records the before and after state of every affected row. The replica applies the exact same row changes, regardless of how the source arrived at them. This provides the strongest consistency guarantee, especially for non-deterministic operations, but can produce large log files when many rows are modified at once.
+
+    **Statement-based logging** records the SQL statements themselves. The log files are compact. However, non-deterministic functions — such as `NOW()`, `RAND()`, or `UUID()` — can produce different results when re-executed on the replica, causing the source and replica to diverge.
+
+    **Mixed logging** uses statement-based format by default and switches to row-based format automatically for statements that MySQL detects as non-deterministic. This balances log file size against consistency.
+
+    **Replication process:**
+
+    1. A data-modifying query runs on the source and is written to the binlog.
+    2. The replica's **IO thread** connects to the source, reads the binlog, and writes it to the replica's **relay log**.
+    3. The replica's **SQL thread** reads the relay log and applies the changes to the replica's database.
+
+    This asynchronous pipeline typically completes within about 100 milliseconds under normal conditions, making replicas nearly current with the source.
+
+    <Warning>
+      Replication is asynchronous by default, meaning a transaction that commits on the source may not yet be visible on a replica at the exact moment of commit. If you route a write to the source and immediately route the confirmation read to a replica, you may read stale data. Route reads that must reflect a recent write back to the source, or use semi-synchronous replication.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is the difference between relational and non-relational databases?">
+    **Relational databases** store data in tables with a fixed schema: defined columns, data types, and constraints. Rows in different tables can be linked through foreign keys, and SQL JOINs reconstruct related data at query time. The relational model enforces data integrity at the database level (unique constraints, foreign key constraints, check constraints) and data is stored once without duplication — a core principle of normalization.
+
+    Relational databases scale primarily by scaling up (adding more CPU, RAM, and disk to a single server). Horizontal sharding is possible but complex. The fixed schema makes arbitrary structural changes difficult once data is in production.
+
+    Representative systems: MySQL, PostgreSQL, Oracle, SQL Server.
+
+    **Non-relational databases (NoSQL)** abandon the fixed table-and-row model in favor of flexible storage formats — documents, key-value pairs, wide columns, or graphs. There is typically no predefined schema; documents in the same collection can have different shapes. Horizontal scaling (adding more servers to a cluster) is a first-class design goal for most NoSQL systems, making them well-suited to very high-volume or distributed workloads.
+
+    The cost is that consistency guarantees are often weaker. Allowing duplicate data (embedding related information in a single document, for example) simplifies reads but makes updates more complex: changing a value may require updating many documents.
+
+    **Choosing between them:**
+
+    | Use relational databases when... | Use non-relational databases when... |
+    | --- | --- |
+    | Data is structured and relatively stable | Schema changes frequently |
+    | Transactions and ACID guarantees are required | Very low latency reads are critical |
+    | Complex queries with JOINs are needed | Horizontal scaling is a primary requirement |
+    | Data integrity must be enforced by the database | Data volume is extremely large |
+
+    <Tip>
+      Most production systems use both: a relational database for transactional core data and a NoSQL store for caching, search, event streams, or analytics. The right choice is always "it depends" — the important thing is being able to articulate what each model optimizes for.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is database normalization and when should you denormalize?">
+    **Normalization** is the process of organizing a database schema to eliminate redundancy and prevent data anomalies. Anomalies are the bugs that emerge from duplicate data: an update anomaly (you update a value in one place but forget another), an insertion anomaly (you cannot insert data without also inserting unrelated data), and a deletion anomaly (deleting one fact accidentally removes another).
+
+    The normal forms build on each other progressively:
+
+    **1NF (First Normal Form):** every column holds an atomic (indivisible) value. No storing comma-separated lists in a single cell.
+
+    **2NF (Second Normal Form):** satisfies 1NF, and every non-key attribute is fully functionally dependent on the entire primary key — not just part of it. Relevant only when the primary key is composite.
+
+    For example, if `(student_id, course_id)` is the primary key and `student_name` depends only on `student_id` (not on the combination), that is a partial dependency — a 2NF violation. Split `student_name` into a separate `students` table.
+
+    **3NF (Third Normal Form):** satisfies 2NF, and there are no transitive dependencies. If A determines B and B determines C, then A transitively determines C. If `employee_id → department_id → department_name`, then `department_name` should be moved to a `departments` table so it depends directly on `department_id` rather than transitively on `employee_id`.
+
+    **BCNF (Boyce-Codd Normal Form):** a stricter version of 3NF. Every determinant must be a candidate key. Addresses edge cases where 3NF still permits anomalies involving overlapping candidate keys.
+
+    **Denormalization** is the deliberate reversal of normalization to improve read performance. By accepting some redundancy, you can reduce JOIN complexity and pre-compute aggregates:
+
+    - Store a `post_count` column on a `users` table instead of counting with a JOIN every time
+    - Embed a product's category name in the order line item instead of joining to the categories table
+
+    Denormalization trades write complexity for read performance. You must ensure that denormalized values stay in sync when the underlying data changes — typically through triggers, application logic, or event-driven updates.
+
+    <Note>
+      3NF is the target for most OLTP (transactional) databases. For OLAP (analytical) workloads, intentional denormalization in star or snowflake schemas is standard practice because analytical queries join massive tables and every JOIN is expensive.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between row-oriented and column-oriented databases?">
+    The same data can be physically organized in two fundamentally different ways on disk, leading to very different query performance characteristics.
+
+    **Row-oriented databases** store all columns of a row together. When you read a row, you get every column in one disk read. This is optimal for OLTP workloads where you frequently read or write complete rows: inserting a new user record, updating an order status, or looking up a customer by ID.
+
+    ```
+    Row-oriented storage:
+    [Atom, 2024-01-23] [Prin, 2024-02-01] [Gosmdochee, 2024-02-03]
+    ```
+
+    Representative systems: MySQL, PostgreSQL.
+
+    **Column-oriented databases** store all values for a single column together. All the names are in one place; all the dates in another. When an analytical query reads only a few columns from millions of rows (e.g., `SELECT SUM(revenue) FROM orders`), the database reads only the `revenue` column's storage pages, skipping all other column data. This dramatically reduces disk I/O for wide tables with many columns.
+
+    ```
+    Column-oriented storage:
+    [Atom, Prin, Gosmdochee] [2024-01-23, 2024-02-01, 2024-02-03]
+    ```
+
+    Representative systems: BigQuery, Amazon Redshift, Snowflake, Apache Parquet (file format).
+
+    **Additional advantages of columnar storage:**
+    - **Compression:** similar values stored together compress much more efficiently (run-length encoding, dictionary encoding)
+    - **Vectorized execution:** CPUs can process batches of homogeneous values with SIMD instructions
+    - **Projection pushdown:** the query engine only reads the columns referenced in the query
+
+    **Trade-offs:**
+    - Row-oriented writes are faster for individual row inserts and updates
+    - Columnar storage is poorly suited for workloads that frequently read entire rows
+    - Most columnar stores are append-only or batch-update systems, not suitable for high-frequency single-row mutations
+
+    <Tip>
+      A useful interview framing: use a row-oriented database for your transactional systems (write-heavy, row-level operations) and a column-oriented store for analytics and reporting (read-heavy, aggregations across many rows but few columns).
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between soft delete and hard delete?">
+    When a record is "deleted" in an application, there are two ways to handle it at the database level.
+
+    **Hard delete (물리 삭제)** executes a `DELETE` statement that physically removes the row from the table:
+
+    ```sql Hard delete
+    DELETE FROM member WHERE id = 1;
+    ```
+
+    **Soft delete (논리 삭제)** marks the row as deleted without removing it, typically by setting a `deleted_at` timestamp column:
+
+    ```sql Soft delete and subsequent query
+    UPDATE member SET deleted_at = CURDATE() WHERE id = 1;
+
+    -- Active records exclude soft-deleted rows
+    SELECT * FROM member WHERE deleted_at IS NULL;
+    ```
+
+    **Comparing the two approaches:**
+
+    | | Hard delete | Soft delete |
+    | --- | --- | --- |
+    | Data recovery | Difficult (backups only) | Easy (unset `deleted_at`) |
+    | Audit trail | Requires separate log | Built in |
+    | Business analytics | Deleted data is gone | Historical data available |
+    | Table size | Shrinks on delete | Always grows |
+    | Query complexity | Simple | Must always filter `deleted_at IS NULL` |
+    | Index efficiency | Higher (fewer rows) | Lower (more rows; partial indexes help) |
+
+    **Hard delete** is appropriate when the data truly has no value after deletion (e.g., temporary session records), when storage costs are a concern, or when regulatory requirements mandate actual erasure (GDPR "right to be forgotten").
+
+    **Soft delete** is appropriate when the data might be needed for auditing, recovery, or analytics, or when "deletion" in the user interface represents a business state change (e.g., a cancelled subscription) rather than permanent destruction.
+
+    <Warning>
+      Soft delete introduces a common bug: forgetting to include `WHERE deleted_at IS NULL` in queries. Use a database view, a query filter abstraction (Hibernate's `@Where` or `@SQLRestriction`), or a base repository class that always applies the filter to avoid accidentally exposing deleted records.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the types of NoSQL databases and when do you use each?">
+    NoSQL is a broad category. The five main storage models each optimize for a different access pattern.
+
+    **Key-value stores** are the simplest model: data is stored as opaque values indexed by a unique key. Reads and writes are O(1). They are not suited for complex queries but excel at caching, session storage, and real-time leaderboards.
+
+    Representative systems: Redis, Amazon DynamoDB.
+
+    Use cases: HTTP session caching, rate limiting counters, pub/sub message brokering, distributed locks.
+
+    **Document-oriented stores** save data as self-describing documents (JSON, BSON, XML). A document can have nested objects and arrays, allowing complex structures to be stored and retrieved in a single operation without JOINs. The schema is flexible — documents in the same collection can have different fields.
+
+    Representative systems: MongoDB, CouchDB.
+
+    Use cases: content management systems, user profiles, product catalogs with varying attributes.
+
+    **Column-family stores** organize data by column families (groups of related columns) rather than rows. Each row can have a different set of columns. This is well-suited for wide, sparse tables and high write throughput at scale.
+
+    Representative systems: Apache Cassandra, HBase.
+
+    Use cases: time-series data, log aggregation, large-scale analytics pipelines.
+
+    **Graph databases** model data as nodes (entities) and edges (relationships). Traversing relationships (e.g., "friends of friends") is done natively and efficiently without self-joins. Regular relational databases become very slow for deeply recursive relationship queries.
+
+    Representative systems: Neo4j, Amazon Neptune.
+
+    Use cases: social networks, recommendation engines, fraud detection graphs, knowledge graphs.
+
+    **Time-series databases** are optimized for data that is indexed by timestamp and written continuously — metrics, sensor readings, and financial tick data. They provide efficient storage for sequential writes and time-windowed aggregations.
+
+    Representative systems: InfluxDB, Prometheus, TimescaleDB.
+
+    Use cases: IoT sensor data, infrastructure metrics, financial market data.
+
+    **Example architecture for a real-time chat application:**
+
+    A single NoSQL type is rarely sufficient:
+    - Use **Redis Pub/Sub** for real-time message delivery (very low latency broadcast)
+    - Use **MongoDB** for durable message storage (flexible document schema, horizontal sharding for growing message history)
+
+    Redis handles the live channel; MongoDB handles the persistent archive. Each is used for what it does best.
+
+    <Note>
+      When choosing a NoSQL system in an interview, explain the access pattern first: "reads are point lookups by key" suggests key-value; "queries traverse relationships" suggests graph; "writes are append-only time-stamped events" suggests time-series. The system choice follows naturally from the access pattern.
+    </Note>
+  </Accordion>
+</AccordionGroup>

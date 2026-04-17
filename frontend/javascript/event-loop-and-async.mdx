@@ -1,0 +1,208 @@
+---
+title: "Event Loop and Async JavaScript Interview Questions"
+description: "Deep-dive into JavaScript's event loop, call stack, task queues, single-threaded concurrency, debounce, throttle, and requestAnimationFrame with Maeil Mail Q&A."
+---
+
+JavaScript runs on a single thread, yet it handles network requests, timers, and user interactions without freezing the browser. The secret is the **event loop** — a coordination mechanism between the engine's call stack, the browser's Web APIs, and two priority-ordered queues. Mastering this model is essential for understanding execution order, avoiding UI jank, and writing performant asynchronous code.
+
+<AccordionGroup>
+  <Accordion title="What is the event loop, and how does it work?">
+    The **event loop** is the mechanism that lets JavaScript handle asynchronous work even though it runs on a single thread.
+
+    At any moment, JavaScript can only execute one piece of code. The event loop continuously monitors two things:
+
+    1. **Call stack** — where currently executing functions are pushed and popped.
+    2. **Task queue(s)** — where completed async callbacks wait to be run.
+
+    When the call stack is empty, the event loop picks the next waiting callback from a queue and pushes it onto the stack for execution.
+
+    **Example — `setTimeout(fn, 0)`**
+
+    ```javascript
+    console.log('start');
+
+    setTimeout(() => {
+      console.log('timeout callback');
+    }, 0);
+
+    console.log('end');
+
+    // Output:
+    // start
+    // end
+    // timeout callback
+    ```
+
+    Even with a 0 ms delay, the callback is handed to the browser's timer Web API. Once the timer fires, the callback is placed in the **macrotask queue**. It only runs after all synchronous code on the call stack has finished — so `'end'` always prints before `'timeout callback'`.
+
+    This is why `setTimeout(fn, 0)` is a common pattern to defer code to the next event loop cycle.
+  </Accordion>
+
+  <Accordion title="What are the different types of task queues?">
+    The task queue is actually split into two distinct queues with different priority levels.
+
+    **Macrotask queue (task queue)**
+
+    Holds callbacks for lower-priority asynchronous operations:
+    - `setTimeout` and `setInterval` callbacks
+    - I/O operations
+    - UI render events and DOM event handlers
+
+    The event loop processes **one macrotask per cycle** before checking if any microtasks have accumulated.
+
+    **Microtask queue**
+
+    Holds callbacks for higher-priority operations:
+    - `Promise.then()` / `Promise.catch()` / `Promise.finally()` callbacks
+    - `queueMicrotask()`
+    - `MutationObserver` callbacks
+
+    **The event loop processes the entire microtask queue before moving on to the next macrotask.** This means microtasks enqueued by other microtasks are also run before any macrotask gets a turn.
+
+    ```javascript
+    console.log('sync');
+
+    setTimeout(() => console.log('macrotask'), 0);
+
+    Promise.resolve().then(() => console.log('microtask'));
+
+    console.log('sync end');
+
+    // Output:
+    // sync
+    // sync end
+    // microtask    ← microtask queue drained first
+    // macrotask    ← then one macrotask is picked up
+    ```
+
+    <Note>
+      The event loop cycle is: **synchronous code → drain microtask queue → pick one macrotask → drain microtask queue again → … repeat**.
+    </Note>
+  </Accordion>
+
+  <Accordion title="JavaScript is single-threaded — how can it handle concurrent operations?">
+    JavaScript's engine itself is single-threaded: it has one call stack and processes one task at a time. True parallelism does not happen inside the JS runtime.
+
+    However, the **host environment** (browser or Node.js) provides additional threads and APIs to handle work in the background:
+
+    - **Browser Web APIs** (e.g. `fetch`, `setTimeout`, DOM events) run outside the JS thread.
+    - **Node.js libuv** handles file I/O, network, and timers on a thread pool.
+
+    The workflow:
+
+    1. JS calls an async function (e.g. `fetch(url)`).
+    2. The work is handed off to the Web API / libuv — the JS thread is freed immediately to run other code.
+    3. When the background work completes, a callback is placed in the appropriate task queue.
+    4. The event loop eventually moves the callback onto the call stack for execution.
+
+    ```javascript
+    console.log('1 - start fetch');
+
+    fetch('https://api.example.com/data')
+      .then(response => response.json())
+      .then(data => console.log('3 - data received', data));
+
+    console.log('2 - after fetch call');
+
+    // Output order:
+    // 1 - start fetch
+    // 2 - after fetch call
+    // 3 - data received ...  (once network responds)
+    ```
+
+    This design keeps the UI responsive: while the network is busy, the JS thread continues handling user clicks, rendering, and other events. The result looks concurrent even though it is cooperative and sequential under the hood.
+  </Accordion>
+
+  <Accordion title="What are debounce and throttle, and when should each be used?">
+    Both techniques limit how often an event handler fires, but they differ in *when* they allow the handler to execute.
+
+    **Debounce**
+
+    Waits until a burst of events has stopped for a specified quiet period, then fires the handler **once**. If a new event arrives before the quiet period elapses, the timer resets.
+
+    Best for: search-as-you-type, form validation, window resize handlers — situations where you only care about the *final* state after activity stops.
+
+    ```javascript
+    function debounce(fn, delay) {
+      let timer;
+      return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    const handleSearch = debounce((query) => {
+      console.log('Searching for:', query);
+    }, 300);
+
+    // Fires 300 ms after the user stops typing
+    input.addEventListener('input', e => handleSearch(e.target.value));
+    ```
+
+    **Throttle**
+
+    Guarantees the handler fires **at most once per interval**, regardless of how many events occur. The first event in each interval triggers the handler immediately (or at the end of the interval, depending on implementation).
+
+    Best for: scroll position tracking, infinite scroll, mouse-move handlers — situations where you need periodic feedback during continuous activity.
+
+    ```javascript
+    function throttle(fn, interval) {
+      let lastTime = 0;
+      return function (...args) {
+        const now = Date.now();
+        if (now - lastTime >= interval) {
+          lastTime = now;
+          fn.apply(this, args);
+        }
+      };
+    }
+
+    const handleScroll = throttle(() => {
+      console.log('Scroll position:', window.scrollY);
+    }, 200);
+
+    window.addEventListener('scroll', handleScroll);
+    ```
+
+    **Choosing between them for infinite scroll**
+
+    Throttle is the better choice. A scroll event is continuous; with throttle the data-fetch request fires as soon as the user reaches the bottom. Debounce would delay the request until the user *stops* scrolling, causing a noticeable lag in loading new content.
+  </Accordion>
+
+  <Accordion title="What is requestAnimationFrame and how does it differ from setTimeout?">
+    `requestAnimationFrame(callback)` asks the browser to call `callback` just before its next paint — typically at the display's refresh rate (60 Hz → ~16.7 ms, 120 Hz → ~8.3 ms).
+
+    ```javascript
+    const animate = () => {
+      // update animation state here
+
+      if (!done) {
+        requestAnimationFrame(animate);
+      }
+    };
+
+    requestAnimationFrame(animate);
+    ```
+
+    **Why not just use `setInterval(fn, 16)`?**
+
+    `setInterval` fires on a fixed JS timer that is unaware of the display's actual refresh cadence. This mismatch causes frame drops: the timer may fire mid-frame (wasted work) or be delayed by a busy call stack, creating visible jank.
+
+    `requestAnimationFrame` is always synchronised to the browser's render cycle, so:
+    - Frames are never rendered mid-update.
+    - The callback frequency adapts automatically to the display's refresh rate (60 Hz, 120 Hz, 144 Hz, etc.).
+    - The browser **pauses callbacks** when the tab is hidden or backgrounded, saving CPU and battery.
+
+    **Task queue placement**
+
+    `requestAnimationFrame` callbacks are stored in a special **map of animation frame callbacks** — separate from both the macrotask queue and the microtask queue. They execute during the browser's rendering step, after all microtasks for the current cycle have been processed.
+
+    <Tip>
+      Use `requestAnimationFrame` for all visual animations. Use `setTimeout` / `setInterval` for non-visual scheduling (e.g. polling an API every 5 seconds) where frame synchronisation does not matter.
+    </Tip>
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Blocking the call stack with heavy synchronous computation (large loops, complex calculations) prevents the event loop from processing any queued callbacks — including UI updates. This freezes the browser. For CPU-intensive work, consider Web Workers, which run on a separate thread and communicate back via the event loop.
+</Warning>

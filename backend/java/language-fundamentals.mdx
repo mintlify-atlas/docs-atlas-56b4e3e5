@@ -1,0 +1,427 @@
+---
+title: "Java Language Fundamentals: Interview Q&A"
+description: "Core Java interview questions covering exceptions, memory model, generics, GC, reflection, and the JVM execution pipeline — with annotated code examples."
+---
+
+Java's language fundamentals form the backbone of nearly every backend interview. This page consolidates the most frequently asked questions drawn from the Maeil Mail interview archive, covering everything from how the JVM executes your code to the subtleties of type casting and generics variance. Each accordion below presents a question exactly as it appears in an interview, followed by a thorough answer backed by concrete code.
+
+<AccordionGroup>
+
+  <Accordion title="What is the difference between Checked and Unchecked exceptions?">
+    **Checked exceptions** are verified at compile time. Any method that can throw a checked exception must either handle it with `try-catch` or declare it in its signature with `throws`. Common examples are `IOException` and `SQLException`. They are best suited to situations where the caller can reasonably anticipate and recover from the failure — file I/O, network communication, database access.
+
+    **Unchecked exceptions** extend `RuntimeException` and are not enforced by the compiler. They typically signal programmer error: a `NullPointerException` from a missing null check, an `ArrayIndexOutOfBoundsException` from a bad index, and so on. Because callers cannot realistically guard against every possible programming mistake, the compiler does not require them to be caught.
+
+    **Error vs Exception** — `Error` represents severe JVM-level failures (`OutOfMemoryError`, `StackOverflowError`) that are generally unrecoverable and should not be caught in application code. `Exception`, by contrast, represents conditions that are usually recoverable with proper handling.
+
+    <Tip>
+      There is no universally correct answer about which type to prefer. A common guideline: use checked exceptions for recoverable external conditions and unchecked exceptions for programming errors or violations of preconditions.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between shallow copy and deep copy?">
+    A **shallow copy** creates a new object but does not copy the objects that the original references — both the original and the copy share the same inner objects. A **deep copy** recursively copies all referenced objects so that the two instances are completely independent.
+
+    ```java
+    class Book {
+        private String name;
+        private Author author;
+
+        public Book shallowCopy() {
+            // author is shared — changes in one affect the other
+            return new Book(this.name, this.author);
+        }
+
+        public Book deepCopy() {
+            // author is a brand-new object
+            Author copiedAuthor = new Author(this.author.getName());
+            return new Book(this.name, copiedAuthor);
+        }
+    }
+    ```
+
+    After a shallow copy, mutating the inner `Author` on the copy also mutates the original:
+
+    ```java
+    After shallow copy and change:
+    Original book1: Book name : Effective Java, Author : Joshua Bloch
+    Shallow copied book: Book name : Effective Java, Author : Joshua Bloch
+    ```
+
+    After a deep copy the two `Author` objects are independent:
+
+    ```java
+    After deep copy and change:
+    Original book2: Book name : Refactoring, Author : Martin Fowler (original name)
+    Deep copied book: Book name : Refactoring, Author : Martin Fowler (new name)
+    ```
+
+    <Note>
+      Defensive copy (see the defensive copy question) is a shallow copy by default. If the elements inside a collection are mutable, you may still need a deep copy to achieve true isolation.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Why must equals() and hashCode() always be overridden together?">
+    Hash-based collections such as `HashSet` and `HashMap` use a two-step lookup: they first compare `hashCode()` values and only call `equals()` when hash codes match. If you override `equals()` without overriding `hashCode()`, two logically equal objects will have different hash codes (the default implementation uses the object's memory address), so the collection will treat them as distinct:
+
+    ```java
+    class Subscribe {
+        private final String email;
+        private final String category;
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Subscribe s = (Subscribe) o;
+            return Objects.equals(email, s.email)
+                && Objects.equals(category, s.category);
+        }
+        // hashCode NOT overridden — HashSet will store duplicates!
+    }
+
+    Subscribe s1 = new Subscribe("user@example.com", "backend");
+    Subscribe s2 = new Subscribe("user@example.com", "backend");
+    new HashSet<>(List.of(s1, s2)).size(); // returns 2, not 1
+    ```
+
+    **The contract**: if `a.equals(b)` is `true`, then `a.hashCode()` must equal `b.hashCode()`. The reverse is not required — hash collisions are allowed — but equal objects must share a hash code.
+  </Accordion>
+
+  <Accordion title="What is the difference between identity and equality in Java?">
+    **Equality** (동등성) asks whether two objects have the same logical content. It is checked with `equals()`, which you override to compare meaningful fields:
+
+    ```java
+    Apple apple = new Apple(100);
+    Apple another = new Apple(100);
+    apple.equals(another); // true — same weight
+    ```
+
+    **Identity** (동일성) asks whether two variables point to the exact same object in memory. It is checked with `==`:
+
+    ```java
+    Apple a1 = new Apple(100);
+    Apple a2 = new Apple(100);
+    Apple a3 = a1;
+
+    a1 == a2; // false — different heap objects
+    a1 == a3; // true  — same reference
+    ```
+
+    **String gotcha** — string literals are stored in the String Constant Pool, so `==` can return `true` for literals with the same content. However, strings created with `new String(...)` always live on the heap and will return `false` with `==`. Always use `equals()` for string comparison:
+
+    ```java
+    String s1 = "hello";
+    String s2 = "hello";
+    String s3 = new String("hello");
+
+    s1 == s2;        // true  (both point to the pool)
+    s1 == s3;        // false (s3 is on the heap)
+    s1.equals(s3);   // true
+    ```
+
+    **Integer caching** — `Integer` values in the range -128 to 127 are cached, so `==` may return `true` for boxed integers in that range. Outside the range it returns `false`. Use `equals()` to be safe.
+  </Accordion>
+
+  <Accordion title="Does Java use call by value or call by reference?">
+    Java is **exclusively call by value**. What is passed to a method is always a copy of the value held in the variable.
+
+    - For **primitive types**, the value itself is copied. Modifying the parameter inside the method has no effect on the caller's variable.
+    - For **reference types**, the reference (memory address) is copied. The method receives its own copy of the reference, not the original variable. This means the method can mutate the object the reference points to, but cannot make the caller's variable point to a different object.
+
+    ```java
+    public void foo() {
+        Student student = new Student();
+        var(student); // passes a COPY of the reference
+    }
+
+    public void var(Student student) {
+        student.study(); // mutates the object — visible to caller
+        student = new Student(); // only changes the local copy — caller unaffected
+    }
+    ```
+
+    Both the caller's frame and the called method's frame contain a `student` variable that holds the same address — but they are separate variables. Changing which object the local `student` points to does not affect the caller.
+  </Accordion>
+
+  <Accordion title="What is defensive copy and when should you use it?">
+    A **defensive copy** severs the reference link between a caller's object and your internal state, preventing unexpected mutation from outside.
+
+    You can apply it at two points:
+
+    1. **In the constructor** — copy the incoming collection or object before storing it.
+    2. **In getters** — return a copy (or an unmodifiable view) instead of the internal reference.
+
+    ```java
+    public class Lotto {
+        private final List<LottoNumber> numbers;
+
+        public Lotto(List<LottoNumber> numbers) {
+            validateSize(numbers);
+            this.numbers = new ArrayList<>(numbers); // defensive copy
+        }
+
+        public List<LottoNumber> getNumbers() {
+            return Collections.unmodifiableList(numbers); // read-only view
+        }
+    }
+    ```
+
+    <Warning>
+      The constructor above still has two subtle issues. First, the copy is shallow — if `LottoNumber` is mutable, callers can still mutate elements via `numbers.get(0).changeNumber(1)`. Second, validation runs before the copy: a concurrent modification between `validateSize` and `new ArrayList<>(...)` could allow invalid state to slip through. For correctness, copy first, then validate.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What objects does the JVM garbage collector target, and how is reachability determined?">
+    The GC targets objects in the heap that are **unreachable** — objects for which no live reference chain exists starting from the **Root Set**. The Root Set consists of:
+
+    - Local variables and method parameters on thread stacks
+    - Static variables in the method area
+    - References held by JNI (native code)
+
+    Any object reachable from the Root Set (directly or through other references) is kept alive. Everything else is eligible for collection.
+
+    **Developer influence over reachability** — Java's `java.lang.ref` package provides `SoftReference` and `WeakReference` to give developers limited control:
+
+    ```java
+    Origin o = new Origin();
+    WeakReference<Origin> wo = new WeakReference<>(o);
+    ```
+
+    - `SoftReference`: the referent is collected only when heap memory is low — useful for memory-sensitive caches.
+    - `WeakReference`: the referent is collected at the next GC cycle once the strong reference is gone — commonly used in `WeakHashMap`.
+  </Accordion>
+
+  <Accordion title="What is Java Reflection and what are its trade-offs?">
+    The **Reflection API** (in the `java.lang.reflect` package) lets you inspect and invoke classes, methods, and fields at runtime without knowing their types at compile time. Key classes are `Class`, `Method`, and `Field`.
+
+    Typical use cases:
+
+    - Building proxies that wrap arbitrary objects (e.g., Spring AOP)
+    - Dependency injection frameworks that need to instantiate classes declared in configuration
+    - Annotation processors that introspect user-defined classes
+
+    Frameworks rely on reflection precisely because they cannot know at compile time what classes the user will write.
+
+    **Trade-offs**:
+
+    | Benefit | Cost |
+    |---|---|
+    | Works without knowing the concrete type | Code is more complex and verbose |
+    | Enables powerful generic frameworks | Breaks encapsulation; `private` members can be accessed |
+    | Supports runtime configuration | JIT optimizations are harder — may be slower than direct calls |
+
+    <Note>
+      Performance overhead from reflection has decreased significantly in modern JVMs but is still measurable in hot paths. Prefer compile-time alternatives (annotation processors, code generation) when performance is critical.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is try-with-resources and why prefer it over try-catch-finally?">
+    Introduced in Java 7, **try-with-resources** automatically closes any `AutoCloseable` resource declared in the `try(...)` clause when the block exits, whether normally or through an exception:
+
+    ```java
+    try (BufferedReader br = new BufferedReader(new FileReader("path"))) {
+        return br.readLine();
+    } catch (IOException e) {
+        return null;
+    }
+    ```
+
+    The equivalent with `try-catch-finally` requires verbose, error-prone boilerplate:
+
+    ```java
+    BufferedReader br = null;
+    try {
+        br = new BufferedReader(new FileReader("path"));
+        return br.readLine();
+    } catch (IOException e) {
+        return null;
+    } finally {
+        if (br != null) {
+            try { br.close(); } catch (IOException e) { e.printStackTrace(); }
+        }
+    }
+    ```
+
+    Beyond brevity, try-with-resources handles **suppressed exceptions** correctly. If both the body and `close()` throw, the body's exception is the primary one, and the `close()` exception is attached as a suppressed exception — so you can see both during debugging. With `try-catch-finally` the `close()` exception silently replaces the original:
+
+    ```java
+    // try-with-resources output:
+    Exception in thread "main" java.lang.Exception: Primary Exception
+        Suppressed: java.lang.Exception: Close Exception
+
+    // try-catch-finally output (primary exception lost):
+    Exception in thread "main" java.lang.Exception: Close Exception
+    ```
+
+    Multiple resources declared in the same `try(...)` are closed in reverse declaration order.
+  </Accordion>
+
+  <Accordion title="Why is String immutable in Java, and what is the String Constant Pool?">
+    `String` is immutable because its internal `byte[]` field is declared `final` and the class exposes no mutation methods. Operations like `concat()`, `replace()`, and `toUpperCase()` return new `String` objects rather than modifying the existing one.
+
+    **Reasons for the immutable design**:
+
+    1. **String Constant Pool** — identical string literals share a single object in the heap's pool, saving memory.
+    2. **Thread safety** — immutable objects need no synchronization.
+    3. **Hashcode caching** — the hash code is computed once and cached, making `String` efficient as a `HashMap` key.
+    4. **Security** — passwords, URLs, and tokens cannot be modified in place after creation.
+
+    **Literal vs constructor**:
+
+    ```java
+    String first  = "hello";            // stored in Constant Pool
+    String second = new String("hello"); // stored in heap (new object every time)
+    String third  = "hello";            // reuses the pool entry
+
+    System.identityHashCode(first);  // e.g. 498931366
+    System.identityHashCode(second); // e.g. 2060468723
+    System.identityHashCode(third);  // 498931366 — same as first
+    ```
+
+    `intern()` moves a heap string into the Constant Pool (or returns the existing pool entry):
+
+    ```java
+    String third = second.intern();
+    System.identityHashCode(third); // same as first
+    ```
+  </Accordion>
+
+  <Accordion title="What is the difference between (String) type casting and String.valueOf()?">
+    Both convert a value to `String`, but they behave very differently when the value is not already a `String` or is `null`.
+
+    **Type casting** — `(String) value`
+
+    ```java
+    Object intValue = 10;
+    String s1 = (String) intValue; // ClassCastException at runtime
+
+    Object nullValue = null;
+    String s2 = (String) nullValue; // null — no exception
+    s2.concat("text");              // NullPointerException
+    ```
+
+    **String.valueOf()** — calls `toString()` if not a `String`, returns `"null"` for `null`:
+
+    ```java
+    Object intValue = 10;
+    String s1 = String.valueOf(intValue); // "10"
+
+    Object nullValue = null;
+    String s2 = String.valueOf(nullValue); // "null"
+    s2.concat("text");                    // "nulltext" — no NPE
+    ```
+
+    Use `instanceof` before casting if the type is uncertain:
+
+    ```java
+    if (intValue instanceof String str) {
+        System.out.println(str);
+    }
+    ```
+
+    <Warning>
+      `String.valueOf(null)` returning `"null"` (the string) rather than `null` can cause silent bugs in JSON serialization or database writes. Validate for `null` before calling `valueOf()` if you need to preserve the distinction.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are generics covariance and contravariance (PECS)?">
+    Java generics are **invariant** by default: `List<Cat>` is not a subtype of `List<Animal>` even though `Cat extends Animal`. This ensures type safety but reduces flexibility.
+
+    ```java
+    List<Animal> animals = new ArrayList<Cat>(); // compile error
+    ```
+
+    Wildcards add variance:
+
+    - **Covariant** (`<? extends T>`) — accepts `T` or any subtype. **Read-only**; you cannot add elements (only `null` is safe).
+    - **Contravariant** (`<? super T>`) — accepts `T` or any supertype. **Write-only** in practice; reads return `Object`.
+
+    **PECS** (Producer Extends, Consumer Super):
+
+    ```java
+    // Producer: reads from the list — use extends
+    public void produce(List<? extends Animal> animals) {
+        for (Animal a : animals) {
+            System.out.println(a);
+        }
+    }
+
+    // Consumer: writes to the list — use super
+    public void consume(List<? super Cat> cats) {
+        cats.add(new Cat());
+    }
+    ```
+
+    **`<?>` vs `<Object>`**:
+
+    | Wildcard | Accepts as argument | Can add elements |
+    |---|---|---|
+    | `<?>` | Any type | Only `null` |
+    | `<Object>` | `List<Object>` only | Any object |
+  </Accordion>
+
+  <Accordion title="How does a Java program execute? (From .java file to machine code)">
+    1. **Compilation** — `javac` compiles `.java` source files into **bytecode** (`.class` files) that the JVM understands but the CPU cannot execute directly.
+
+    2. **Class loading** — the **Class Loader** dynamically loads bytecode into the JVM's Method Area at runtime (not all at startup). Loading triggers three sub-steps:
+       - **Loading**: reads the `.class` file into memory.
+       - **Linking**: verifies the bytecode structure, allocates memory for `static` variables with default values, and resolves symbolic references.
+       - **Initialization**: assigns user-defined values to `static` variables and executes `static` blocks.
+
+    3. **Execution** — the **Execution Engine** converts bytecode to machine code using two complementary strategies:
+       - **Interpreter**: translates bytecode line by line — fast startup, but repeats work on loops.
+       - **JIT compiler**: detects "hotspot" methods executed repeatedly and compiles them entirely to native machine code, caching the result for subsequent calls.
+
+    The combination gives Java fast startup (interpreter) plus high steady-state throughput (JIT).
+
+    <Note>
+      Class loading is lazy: a class is loaded the first time an instance is created, a static method/field is accessed, or a static field is assigned. This avoids loading classes that the program never uses.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What GC algorithms does the JVM provide?">
+    | GC | Default for | Key characteristic |
+    |---|---|---|
+    | Serial GC | Small / single-CPU systems | Single-threaded; longest STW pauses |
+    | Parallel GC | Java 5–8 default | Multi-threaded Young GC; throughput-focused |
+    | Parallel Old GC | — | Parallel GC extended to Old generation |
+    | CMS GC | Java 5–8 (removed Java 14) | Concurrent marking; low pause, but fragmentation |
+    | G1 GC | Java 9+ default | Heap divided into regions; balances throughput and pause |
+    | ZGC | Java 11+ | Sub-10 ms pauses; designed for large heaps |
+    | Shenandoah GC | Java 12+ | Low-latency like ZGC; region-based |
+    | Epsilon GC | Java 11+ | No-op GC for benchmarking only |
+
+    **G1 and Humongous objects** — objects larger than 50% of a G1 region bypass the Young generation and go directly to the Old generation, increasing Full GC risk. Tune with `-XX:G1HeapRegionSize` or split large objects.
+
+    **Automatic GC selection** — on OpenJDK, a machine with fewer than 2 CPU cores or less than 2 GB of RAM is not classified as a Server-Class Machine, so Serial GC is selected instead of G1. Override with `-XX:+UseG1GC`.
+
+    ```bash
+    # Check which GC is running
+    sudo jcmd {PID} VM.info
+    ```
+  </Accordion>
+
+  <Accordion title="What is Gradle and how does it differ from Maven?">
+    **Gradle** is a JVM build automation tool that improves on Ant and Maven through incremental builds, a build cache, and a daemon process. It supports both Groovy DSL and Kotlin DSL for build scripts.
+
+    | Feature | Maven | Gradle |
+    |---|---|---|
+    | Build script | XML (`pom.xml`) | Groovy or Kotlin DSL |
+    | Build speed | Rebuilds everything | Incremental + cached |
+    | Dependency management | Basic | Dynamic versions, caching |
+    | Extensibility | Limited plugins | Custom tasks, rich plugin ecosystem |
+    | Android | Not supported | Official Android build tool |
+    | Multi-project | Inheritance, complex | Injection-based, optimized |
+
+    **Dependency configurations** define when a dependency is on the classpath:
+
+    - `implementation` — compile and runtime; not exposed to dependent modules.
+    - `api` — like `implementation` but transitive: downstream modules can use it.
+    - `compileOnly` — compile time only (e.g., Lombok annotations).
+    - `annotationProcessor` — runs annotation processors at compile time (MapStruct, Lombok).
+    - `runtimeOnly` — runtime only (e.g., JDBC drivers).
+    - `testImplementation` / `testRuntimeOnly` — test scope equivalents.
+  </Accordion>
+
+</AccordionGroup>

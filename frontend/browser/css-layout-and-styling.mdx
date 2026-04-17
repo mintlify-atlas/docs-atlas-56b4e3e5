@@ -1,0 +1,375 @@
+---
+title: "CSS Layout and Styling Interview Questions"
+description: "Interview Q&A on Flexbox vs Grid, CSS units, box model, specificity, preprocessors, pseudo-elements, image formats, and viewport units."
+---
+
+CSS layout and styling questions span a wide range — from choosing between Flexbox and Grid, to understanding how the cascade and specificity rules work, to picking the right image format or CSS unit for a given context. This page covers the topics that appear most frequently in frontend technical interviews.
+
+<AccordionGroup>
+  <Accordion title="What is the difference between Flexbox and Grid, and when should you use each?">
+    Both are CSS layout systems for arranging elements, but they operate in different dimensions and serve different purposes.
+
+    **Flexbox** is a **one-dimensional** layout system. It arranges items along a single axis — either a row or a column — and is optimized for distributing space among items in that direction.
+
+    **Grid** is a **two-dimensional** layout system. It lets you define rows and columns simultaneously and place items precisely within the resulting grid cells.
+
+    ```css
+    /* Flexbox: horizontal navigation bar */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* Grid: page-level layout */
+    .page {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 64px 1fr 48px;
+    }
+    ```
+
+    | | Flexbox | Grid |
+    |---|---|---|
+    | Dimensions | 1D (row or column) | 2D (rows and columns) |
+    | Content flow | Content-driven | Layout-driven |
+    | Best for | Nav bars, button groups, cards in a row | Page layouts, gallery grids, dashboards |
+
+    <Tip>
+      In practice, use Flexbox when the layout is driven by the content (items adapt to their size), and Grid when you need to define explicit tracks and place items in both directions at once.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is semantic markup and why does it matter for accessibility and SEO?">
+    Semantic markup means using HTML elements that convey the *meaning* of their content — not just its visual appearance. Instead of wrapping everything in `<div>` or `<span>`, you use elements whose names reflect what they contain.
+
+    ```html
+    <!-- Non-semantic -->
+    <div class="header">
+      <div class="nav">...</div>
+    </div>
+    <div class="main">
+      <div class="article">...</div>
+    </div>
+
+    <!-- Semantic -->
+    <header>
+      <nav>...</nav>
+    </header>
+    <main>
+      <article>...</article>
+    </main>
+    <footer>...</footer>
+    ```
+
+    **Accessibility:** Screen readers and other assistive technologies use semantic elements to understand page structure. A `<nav>` tells the screen reader it contains navigation links; an `<article>` signals a standalone piece of content. This allows visually impaired users to navigate the page efficiently.
+
+    **SEO:** Search engines parse HTML structure to understand page content and hierarchy. Semantic markup makes it easier for crawlers to identify the main content area, headings, and navigation — which can positively affect search rankings.
+
+    <Note>
+      Even in client-side rendered (CSR) applications, semantic markup matters. Modern search engine crawlers can execute JavaScript, so a well-structured DOM still benefits SEO.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between px, em, and rem in CSS?">
+    These three units differ in their reference point and whether they scale with user preferences.
+
+    **`px` (pixels)** is an absolute unit. `font-size: 16px` always renders at 16 physical pixels regardless of the user's browser font size settings. This makes it precise but inflexible for accessibility.
+
+    **`em`** is a relative unit based on the `font-size` of the *current element* (or its parent if the property being set is `font-size`). The value compounds through nested elements:
+
+    ```css
+    /* Parent is 20px */
+    .parent { font-size: 20px; }
+
+    /* Child is 1.5 × 20px = 30px */
+    .child { font-size: 1.5em; }
+
+    /* Grandchild is 1.5 × 30px = 45px — compounding! */
+    .grandchild { font-size: 1.5em; }
+    ```
+
+    **`rem` (root em)** is relative to the `font-size` of the root `<html>` element only. It does not compound, making it predictable:
+
+    ```css
+    html { font-size: 16px; }
+
+    .any-element { font-size: 1.5rem; } /* always 24px */
+    ```
+
+    | Unit | Relative to | Compounds | Respects user font settings |
+    |---|---|---|---|
+    | `px` | Nothing (absolute) | No | No |
+    | `em` | Current/parent element | Yes | Yes (if root is set in em) |
+    | `rem` | Root `<html>` element | No | Yes |
+
+    **When to prefer `em` over `rem`:** when you want spacing to scale proportionally with the component's own font size — for example, button padding that adjusts automatically if the button's text size changes.
+  </Accordion>
+
+  <Accordion title="What does box-sizing: border-box do and why is it commonly used?">
+    The `box-sizing` property controls how the browser calculates an element's total width and height.
+
+    **`box-sizing: content-box` (default):** `width` and `height` define the content area only. Padding and borders are added *on top*, making the rendered element larger than specified.
+
+    ```css
+    .box {
+      box-sizing: content-box;
+      width: 200px;
+      padding: 20px;
+      border: 2px solid black;
+    }
+    /* Actual rendered width: 200 + 20*2 + 2*2 = 244px */
+    ```
+
+    **`box-sizing: border-box`:** `width` and `height` include content, padding, and border. The element renders at *exactly* the specified size.
+
+    ```css
+    .box {
+      box-sizing: border-box;
+      width: 200px;
+      padding: 20px;
+      border: 2px solid black;
+    }
+    /* Actual rendered width: 200px — content shrinks to fit */
+    /* Content area: 200 - 20*2 - 2*2 = 156px */
+    ```
+
+    Most modern projects apply `border-box` globally:
+
+    ```css
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    ```
+
+    This makes layout calculations intuitive: a column set to `width: 50%` stays at exactly 50% of its container regardless of padding.
+  </Accordion>
+
+  <Accordion title="What are the differences between CSS image formats (JPEG, PNG, WebP, SVG)?">
+    Choosing the right image format affects file size, visual quality, and browser support.
+
+    | Format | Compression | Transparency | Best use case |
+    |---|---|---|---|
+    | JPEG | Lossy | No | Photographs, complex gradients |
+    | PNG | Lossless | Yes | Logos, icons, images with text |
+    | WebP | Lossy or lossless | Yes | General web images (modern browsers) |
+    | SVG | Vector (no raster) | Yes | Icons, logos, illustrations |
+
+    **JPEG** produces small files but degrades quality with every save. It has no transparency support, making it unsuitable for images that need to layer over backgrounds.
+
+    **PNG** preserves every pixel exactly and supports alpha transparency, but files are larger than JPEG for photographs.
+
+    **WebP** (developed by Google) matches or exceeds JPEG and PNG quality at significantly smaller file sizes. The main caveat is browser support — while modern browsers handle it well, very old browsers may not.
+
+    **SVG** is XML-based vector graphics that scale infinitely without quality loss. File size stays small for simple shapes but grows large for complex illustrations.
+
+    <Note>
+      A common pattern is to offer WebP with a PNG or JPEG fallback using the `<picture>` element, giving modern browsers the efficient format while maintaining compatibility.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between transform and position for animations?">
+    For animations and dynamic visual movement, `transform` is strongly preferred over changing `position` values like `top` or `left`.
+
+    **`transform`** is processed in the **compositing** stage of the rendering pipeline. It does not trigger reflow or repaint — only compositing — which means the GPU handles it without any CPU layout recalculation.
+
+    **`position` + `top`/`left`** changes trigger **reflow**. The browser must recalculate the layout of the moved element and potentially all surrounding elements, then repaint, then composite. This is significantly more expensive.
+
+    ```css
+    /* Preferred: GPU-accelerated, no reflow */
+    .button:hover {
+      transform: translateY(-5px);
+    }
+
+    /* Avoid for animation: triggers reflow every frame */
+    .button {
+      position: relative;
+    }
+    .button:hover {
+      top: -5px;
+    }
+    ```
+
+    **When to still use `position`:** layout structure and static positioning. Use `position: absolute` or `relative` to define where an element sits in the document flow. `transform` only shifts the visual rendering — it does not affect how other elements are positioned around the element.
+
+    <Tip>
+      For performant animations, restrict yourself to `transform` and `opacity`. Both are compositor-only properties and produce smooth 60fps animations even on mobile.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between Reset CSS and Normalize CSS?">
+    Both approaches address the inconsistency in default styles applied by different browsers, but they take opposite philosophies.
+
+    **Reset CSS** strips all browser default styles, leaving every element with zero margin, zero padding, and no visual differentiation. You start from a completely blank slate.
+
+    ```css
+    /* Eric Meyer's Reset CSS approach */
+    * {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      font-size: 100%;
+      font: inherit;
+      vertical-align: baseline;
+    }
+    ```
+
+    **Normalize CSS** preserves useful defaults and only corrects cross-browser *inconsistencies*. Heading sizes, link colors, and form element styles remain close to browser defaults — just made consistent.
+
+    ```css
+    /* Normalize CSS approach: keep sensible defaults, fix inconsistencies */
+    h1 {
+      font-size: 2em;
+      margin: 0.67em 0;
+    }
+    a {
+      background-color: transparent;
+    }
+    ```
+
+    | | Reset CSS | Normalize CSS |
+    |---|---|---|
+    | Browser defaults | Completely removed | Preserved where reasonable |
+    | Starting point | Blank slate | Consistent baseline |
+    | Extra styling needed | Everything | Only overrides |
+    | Control | Maximum | Moderate |
+
+    **When to use Reset CSS:** design systems or projects where every style must be explicitly defined (full creative control). **When to use Normalize CSS:** projects with tight timelines or when you want a sensible foundation to build on quickly.
+  </Accordion>
+
+  <Accordion title="What are CSS preprocessors and how do they differ from zero-runtime CSS?">
+    **CSS preprocessors** (Sass, Less, Stylus) extend CSS with programming constructs — variables, nesting, mixins, and functions — that are compiled to standard CSS at build time.
+
+    ```scss
+    // Sass (SCSS) — compiled to CSS before delivery
+    $border-radius: 4px;
+    $button-padding: 10px 20px;
+
+    @mixin button($bg-color) {
+      background-color: $bg-color;
+      color: white;
+      padding: $button-padding;
+      border-radius: $border-radius;
+    }
+
+    .primary-button { @include button(#007bff); }
+    .secondary-button { @include button(#6c757d); }
+    ```
+
+    The goal of preprocessors is to improve **developer ergonomics** and **code reuse** when writing traditional CSS.
+
+    **Zero-runtime CSS** (e.g., vanilla-extract, Linaria) emerged to solve the *performance* problems of CSS-in-JS. CSS-in-JS generates styles dynamically at runtime — on every render — which prevents caching and adds JavaScript execution overhead. Zero-runtime CSS moves all style computation to build time, producing static CSS files with no runtime cost.
+
+    | | CSS Preprocessors | Zero-Runtime CSS |
+    |---|---|---|
+    | Why it exists | Improve CSS authoring ergonomics | Eliminate CSS-in-JS runtime cost |
+    | Syntax | CSS-like (SCSS, Less) | JavaScript/TypeScript |
+    | Output | Static CSS files | Static CSS files |
+    | Component co-location | No | Yes |
+    | Dynamic styles | Possible at build time | Requires extra patterns |
+  </Accordion>
+
+  <Accordion title="What are CSS pseudo-elements and how do they differ from pseudo-classes?">
+    **Pseudo-elements** target a specific *part* of an element and are denoted with `::` (double colon). They let you style sub-components of an element or inject generated content without adding extra HTML.
+
+    ```css
+    /* Inserts content before the element */
+    button::before {
+      content: '→ ';
+    }
+
+    /* Styles only the first line of a paragraph */
+    p::first-line {
+      font-weight: bold;
+    }
+
+    /* Styles the first letter */
+    p::first-letter {
+      font-size: 2em;
+      float: left;
+    }
+    ```
+
+    Common pseudo-elements: `::before`, `::after`, `::first-letter`, `::first-line`, `::placeholder`, `::selection`.
+
+    **Pseudo-classes** target an element based on its *state or condition* and use `:` (single colon). They do not create new content — they modify the element's own styles.
+
+    ```css
+    /* Fires when the cursor hovers over the element */
+    button:hover { background-color: #0056b3; }
+
+    /* Fires when the element has keyboard focus */
+    input:focus { outline: 2px solid blue; }
+
+    /* Selects the third child */
+    li:nth-child(3) { color: red; }
+    ```
+
+    **The core distinction:** pseudo-elements answer *"which part of the element?"* while pseudo-classes answer *"in what state or condition?"*
+  </Accordion>
+
+  <Accordion title="What are dvh, svh, and lvh, and why were they introduced?">
+    These three units are new viewport height measurements introduced to solve a longstanding problem with `vh` on mobile devices.
+
+    **The `vh` problem:** `1vh` is defined as 1% of the viewport height. On mobile browsers, the viewport height changes dynamically as the address bar and navigation bar appear or disappear when scrolling. `vh` was historically calculated with or without these bars inconsistently across browsers, causing layouts to overflow or leave gaps.
+
+    **`dvh` (Dynamic Viewport Height):** reflects the *current* viewport height, updating in real time as browser UI elements appear or disappear. Most natural for content that should fill the visible screen.
+
+    **`svh` (Small Viewport Height):** always equals the viewport height when the browser UI is *fully shown* (smallest possible viewport). Provides a stable value that never causes overflow.
+
+    **`lvh` (Large Viewport Height):** always equals the viewport height when the browser UI is *fully hidden* (largest possible viewport). Useful for full-bleed sections.
+
+    ```css
+    /* Fills exactly the current visible area */
+    .hero { height: 100dvh; }
+
+    /* Guaranteed never to overflow, even with address bar visible */
+    .section { min-height: 100svh; }
+
+    /* Maximizes use of screen real estate when bar is hidden */
+    .fullscreen { height: 100lvh; }
+    ```
+
+    <Note>
+      `dvh` can cause layout recalculation (reflow) each time the browser UI toggles, which may produce a slight jitter on scroll. For performance-critical UIs, `svh` offers a stable, non-reflow alternative.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How does CSS specificity work and what is !important?">
+    CSS specificity determines which rule wins when multiple selectors target the same element and set the same property. The browser assigns a score to each selector and applies the highest-scoring rule.
+
+    **Specificity hierarchy (highest to lowest):**
+
+    1. **Inline styles** — `style="color: red"` on the element itself
+    2. **ID selectors** — `#unique`
+    3. **Class, pseudo-class, and attribute selectors** — `.text`, `:hover`, `[type="text"]`
+    4. **Element and pseudo-element selectors** — `p`, `div`, `::before`
+
+    ```css
+    p { color: blue; }          /* element selector */
+    .text { color: red; }       /* class selector */
+    #unique { color: green; }   /* ID selector */
+    ```
+
+    ```html
+    <p id="unique" class="text">Hello, CSS!</p>
+    ```
+
+    The paragraph renders in **green** because the ID selector has the highest specificity.
+
+    When scores are equal, the rule declared *later* in the stylesheet wins.
+
+    **`!important`** overrides all specificity rules and forces a declaration to take precedence:
+
+    ```css
+    p { color: black !important; }
+    ```
+
+    If multiple `!important` declarations conflict, specificity rules apply among them.
+
+    <Warning>
+      Overusing `!important` makes stylesheets unpredictable and hard to maintain. Treat it as a last resort — for utility overrides or third-party style resets — and avoid it in component styles.
+    </Warning>
+  </Accordion>
+</AccordionGroup>

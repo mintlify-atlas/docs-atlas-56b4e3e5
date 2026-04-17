@@ -1,0 +1,224 @@
+---
+title: "SSR, Server Components, and Rendering Patterns in Next.js"
+description: "Key interview questions on SSR vs CSR, React Server Components, Streaming SSR, Server Actions, Progressive Partial Rendering, and why teams choose Next.js."
+---
+
+Modern Next.js applications blend multiple rendering strategies — server-side rendering, static generation, streaming, and client-side hydration — to deliver fast, SEO-friendly experiences. Understanding when and why to use each approach, and how React's Server Component model fits into this picture, is essential knowledge for any frontend engineer working with Next.js today.
+
+<AccordionGroup>
+  <Accordion title="What is SSR and how does it differ from CSR?">
+    **SSR (Server Side Rendering)** means the server produces a complete, ready-to-display HTML document and sends it to the client. The browser simply parses and paints the HTML — no JavaScript execution is required before the user sees content.
+
+    **CSR (Client Side Rendering)** is the opposite: the server sends a minimal HTML skeleton, the browser downloads a JavaScript bundle, executes it, and dynamically populates the page.
+
+    In Next.js, SSR is commonly paired with **hydration** — after the pre-rendered HTML is displayed, React attaches event listeners and takes over state management, turning the static page into a fully interactive application.
+
+    **Advantages of SSR:**
+
+    - **Better SEO** — search engine crawlers receive fully populated HTML rather than an empty shell, making it easier to index content. This is especially valuable for blogs, e-commerce sites, and any page where discoverability matters.
+    - **Faster initial paint** — the browser can render meaningful content immediately without waiting for a JavaScript bundle to download and execute, which reduces the perceived load time (FCP/LCP).
+
+    **Drawbacks of SSR:**
+
+    - **TTV vs. TTI gap** — when hydration is involved, the page is visible (Time to View) before it is interactive (Time to Interactive). A user who clicks a button during this window gets no response, which can feel broken.
+    - **Higher server costs** — dynamically assembling a page on every request requires running an application server (WAS), unlike serving static assets from a CDN.
+    - **Increased implementation complexity** — mixing server-side and client-side logic requires careful separation of concerns, raising the cognitive overhead of the codebase.
+
+    <Note>
+      Traditional SSR (full-page reloads on every navigation) makes client-side routing difficult. Next.js solves this by combining SSR for the initial load with client-side navigation for subsequent route transitions.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are React Server Components and why do they matter?">
+    Introduced in React 18, **Server Components** are components that render exclusively on the server and are never shipped to the client as JavaScript. They are fundamentally different from the client-side components that React developers are accustomed to.
+
+    **Key benefits:**
+
+    - **Smaller client bundles** — because the component code never reaches the browser, heavy dependencies (markdown parsers, date libraries, database drivers) stay on the server.
+    - **Direct data access** — a Server Component can query a database or call an internal API directly, eliminating the round-trip to a separate backend endpoint and reducing over-fetching.
+    - **Security** — sensitive logic (API keys, database connection strings, business rules) is never exposed to the client.
+
+    **How they compose with Client Components:**
+
+    React's design intentionally separates concerns: Client Components own interactivity (state, event handlers, browser APIs), while Server Components own data-driven, static rendering. You can nest a Client Component inside a Server Component, but not the other way around.
+
+    ```tsx
+    // ProductPage.tsx — Server Component (default in Next.js App Router)
+    import AddToCartButton from './AddToCartButton'; // Client Component
+
+    async function ProductPage({ id }: { id: string }) {
+      // Direct DB/API call — stays on the server, never sent to the browser
+      const product = await db.products.findById(id);
+
+      return (
+        <div>
+          <h1>{product.name}</h1>
+          <p>{product.description}</p>
+          {/* Client Component handles the interactive button */}
+          <AddToCartButton productId={id} />
+        </div>
+      );
+    }
+    ```
+
+    ```tsx
+    // AddToCartButton.tsx — Client Component
+    'use client';
+
+    export default function AddToCartButton({ productId }: { productId: string }) {
+      return (
+        <button onClick={() => addToCart(productId)}>
+          Add to Cart
+        </button>
+      );
+    }
+    ```
+
+    **Limitations to keep in mind:**
+
+    - Server Components require a live server — they cannot be used in purely static or truly serverless contexts without constraints.
+    - They cannot hold state (`useState`), use effects (`useEffect`), or respond to browser events. Rich, real-time interactivity still requires Client Components.
+
+    <Tip>
+      In the Next.js App Router, every component is a Server Component by default. Only add `'use client'` when you genuinely need interactivity, browser APIs, or React hooks.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is Streaming SSR and what problems does it solve?">
+    Traditional SSR blocks the response until the entire page is rendered — every data fetch must complete before the first byte is sent. **Streaming SSR** breaks this bottleneck by sending HTML to the client incrementally as each piece becomes ready.
+
+    React 18 enables this via the `renderToPipeableStream` API:
+
+    ```js
+    import { renderToPipeableStream } from 'react-dom/server';
+
+    renderToPipeableStream(<App />, {
+      onShellReady() {
+        res.setHeader('Content-Type', 'text/html');
+        stream.pipe(res);
+      },
+    });
+    ```
+
+    The `onShellReady` callback fires as soon as the shell (layout, navigation, above-the-fold content) is ready, and the stream begins flowing immediately. Slower sections — a comments feed, personalised recommendations — arrive as their data resolves, wrapped in `<Suspense>` boundaries.
+
+    **Benefits:**
+
+    - Improved **TTFB (Time to First Byte)** — the browser starts receiving and rendering content right away.
+    - Users see critical content earlier, especially on data-heavy pages.
+    - Works naturally with React's `<Suspense>` to show skeleton/fallback UI while slower sections load.
+
+    **The hydration mismatch problem:**
+
+    Because HTML arrives in chunks and React hydrates incrementally, there is a risk of **server/client state divergence**. If the data used to render a component on the server differs from the data available when React hydrates on the client, React will warn and may produce unexpected UI behavior.
+
+    **Solutions:**
+
+    - Use a shared data-fetching layer (such as TanStack Query's server prefetching with `dehydrate`/`hydrate`) so both server and client operate from the same snapshot.
+    - Design `<Suspense>` fallbacks carefully so that loading states are stable and don't cause layout shifts during hydration.
+
+    <Warning>
+      Streaming SSR can complicate caching strategies. A streamed response cannot be cached as a single unit in the same way a complete static page can. Always verify your CDN and caching layer supports streaming responses before relying on this approach.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are Next.js Server Actions and when should you use them?">
+    **Server Actions** are asynchronous functions annotated with the `'use server'` directive that run on the Next.js server but can be invoked directly from client-side code. They collapse the traditional client → API → database workflow into a direct client → server function call.
+
+    **Defining a Server Action:**
+
+    ```tsx
+    // actions/reviews.ts
+    'use server';
+
+    export async function createReviewAction(data: FormData) {
+      const content = data.get('content') as string;
+
+      if (!content) throw new Error('Content is required');
+
+      await db.reviews.create({ content });
+      revalidatePath('/reviews');
+    }
+    ```
+
+    **Using a Server Action in a form:**
+
+    ```tsx
+    // ReviewForm.tsx
+    import { createReviewAction } from '@/actions/reviews';
+
+    export default function ReviewForm() {
+      return (
+        <form action={createReviewAction}>
+          <textarea name="content" required />
+          <button type="submit">Submit Review</button>
+        </form>
+      );
+    }
+    ```
+
+    **Why use Server Actions?**
+
+    1. **Simplified client-server interaction** — no need to create a dedicated API route for every mutation. The server logic is co-located with the feature.
+    2. **Security** — Server Action code is never included in the client bundle. Secrets and internal logic remain server-only.
+    3. **Progressive enhancement** — because Server Actions use the native HTML `<form action>` attribute, they work even when JavaScript is disabled or has not yet loaded. This makes them more resilient than fetch-based mutations.
+    4. **Smaller bundles** — moving mutation logic to the server reduces the amount of JavaScript shipped to the client.
+
+    <Note>
+      Server Actions are not a replacement for a dedicated backend. For complex business logic, authorization, or scenarios where multiple clients (mobile, third-party) need to call the same endpoint, a separate API layer is still the right choice.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is Progressive Partial Rendering (PPR)?">
+    **Progressive Partial Rendering (PPR)** is a rendering strategy that prioritizes getting critical content in front of the user as quickly as possible, then progressively loading lower-priority sections. Rather than waiting for every part of a page to be ready before showing anything, PPR renders and streams the most important content first.
+
+    **Core techniques that make up PPR:**
+
+    - **Hybrid rendering** — mixing SSR for above-the-fold, data-driven sections with CSR for interactive widgets.
+    - **Streaming SSR** — sending HTML chunks as they are ready rather than waiting for a complete page.
+    - **Progressive hydration** — hydrating the interactive parts of the page in order of importance rather than all at once.
+    - **Lazy Loading** — deferring the load of off-screen images and components until they enter the viewport.
+
+    **PPR vs. Lazy Loading:**
+
+    Lazy Loading is a specific technique (load resources only when needed). PPR is a broader architectural approach that *uses* Lazy Loading as one of its building blocks alongside streaming and selective hydration.
+
+    **Impact on performance metrics:**
+
+    PPR directly improves the Core Web Vitals that affect both user experience and SEO:
+
+    | Metric | What it measures | PPR impact |
+    |--------|-----------------|------------|
+    | **FCP** (First Contentful Paint) | Time until the first content appears | Improved — shell HTML arrives earlier |
+    | **LCP** (Largest Contentful Paint) | Time until the main content is visible | Improved — critical content is prioritized |
+    | **CLS** (Cumulative Layout Shift) | Unexpected visual shifts during load | Requires care — streaming can cause layout shifts if `<Suspense>` boundaries are not sized correctly |
+    | **TTI** (Time to Interactive) | Time until the page is fully interactive | Improved — progressive hydration reduces main-thread blocking |
+
+    <Tip>
+      In Next.js App Router, PPR is achieved by wrapping slower, non-critical sections in `<Suspense>` with a meaningful `fallback`. Next.js then statically generates the shell and streams the dynamic parts independently.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Why do developers choose Next.js over plain React?">
+    Building a production-ready React application from scratch requires assembling and configuring many separate tools: a bundler (Webpack/Vite), a router (React Router), a rendering strategy (SSR setup), image optimization, code splitting, and more. Each piece introduces complexity and potential misconfiguration.
+
+    **Next.js provides these out of the box:**
+
+    - **File-system routing** — creating a file at `app/about/page.tsx` automatically creates the `/about` route. No router configuration required.
+    - **Multiple rendering modes** — SSR, SSG (Static Site Generation), ISR (Incremental Static Regeneration), and CSR are all supported with minimal configuration.
+    - **Built-in optimizations** — image optimization (`next/image`), font optimization (`next/font`), automatic code splitting, and data caching.
+    - **Server Components and Server Actions** — first-class support for the latest React primitives.
+
+    **Trade-offs to consider:**
+
+    | Advantage | Corresponding trade-off |
+    |-----------|------------------------|
+    | Batteries included | Harder to customize — the file-system router and App Router conventions constrain project structure |
+    | Rapid setup | Learning curve — App Router, Server Components, and the Next.js caching model all require study |
+    | Frequent updates | Keeping up with breaking changes between major versions adds maintenance overhead |
+
+    <Note>
+      Next.js is an opinionated framework. If a project has unusual architectural requirements (custom router, non-standard build pipeline), the conventions Next.js enforces can become a liability rather than an asset.
+    </Note>
+  </Accordion>
+</AccordionGroup>

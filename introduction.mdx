@@ -1,0 +1,105 @@
+---
+title: "About the Maeil Mail Interview Archive"
+description: "Maeil Mail delivered one technical interview Q&A per day to Korean engineers. This archive preserves 300+ frontend and backend questions with expert answers."
+---
+
+Maeil Mail (매일메일) was a subscription email service for software engineers preparing for technical interviews at Korean tech companies. Every day, subscribers received one carefully written question-and-answer pair covering a real interview topic — from JavaScript closures and React rendering, to JPA transactions and distributed system design. The service ran until its closure, at which point the entire content library was published as an open archive so engineers could continue learning from it.
+
+## The service
+
+Maeil Mail delivered questions across two tracks: frontend and backend. Each question was written to match the depth and framing used in actual technical interviews, with answers that went beyond surface-level definitions. Rather than a list of facts to memorize, each answer was structured to help you explain a concept clearly under interview conditions — the same skill that separates candidates who know something from those who can communicate it well.
+
+The daily cadence was intentional. Rather than overwhelming subscribers with a study dump, one question per day created a sustainable habit. Over the course of months, a subscriber who engaged consistently would cover the full breadth of topics that come up in Korean software engineering interviews.
+
+## Why this archive exists
+
+When the Maeil Mail service ended, the question-and-answer content was too valuable to disappear. This repository preserves all of it in a browsable, searchable format — organized by topic rather than delivery date, so you can study systematically instead of sequentially.
+
+The archive is open source and available on [GitHub](https://github.com/maeil-mail/maeil-mail-contents).
+
+## What's in the archive
+
+The archive contains 302 questions split across two engineering tracks:
+
+<Columns cols={2}>
+  <Card title="Frontend — 150 questions" icon="browser" href="/frontend/javascript/closures-and-scope">
+    Covers JavaScript fundamentals, React core concepts, Next.js and modern architecture, browser internals, CSS and UX, TypeScript and tooling, network and security, and testing practices.
+  </Card>
+  <Card title="Backend — 152 questions" icon="server" href="/backend/spring/mvc-and-request-handling">
+    Covers Spring and the application layer, persistence and databases, networking and HTTP, distributed systems and infrastructure, OS and concurrency, Java language fundamentals, architecture and design patterns, and testing and security.
+  </Card>
+</Columns>
+
+## Topic coverage
+
+### Frontend
+
+<AccordionGroup>
+  <Accordion title="JavaScript fundamentals">
+    Scope, closures, execution context, the event loop, hoisting, promises, async/await, prototypes, `this` binding, immutability, memory management, functional programming, generators, and iterables. 31 questions.
+  </Accordion>
+  <Accordion title="React core concepts and rendering">
+    Props and state, controlled vs. uncontrolled components, Strict Mode, render and commit phases, `useEffect` and `useLayoutEffect`, Error Boundaries, Suspense, hooks rules, concurrent mode, batching updates, and the virtual DOM. 21 questions.
+  </Accordion>
+  <Accordion title="Next.js and modern React architecture">
+    SSR, server components, server actions, streaming SSR, TanStack Query, BFF pattern, Next.js caching, middleware, Progressive Partial Rendering, and client-side routing. 14 questions.
+  </Accordion>
+  <Accordion title="Browser, DOM, and Web APIs">
+    The browser rendering pipeline, reflow and repaint, DOM events and propagation, event bubbling and capturing, localStorage vs. sessionStorage, the stacking context, web accessibility, WebView, User-Agent, and web standards. 19 questions.
+  </Accordion>
+  <Accordion title="CSS, UI, and user experience">
+    Flexbox vs. Grid, box-sizing, CSS specificity, pseudo-elements, length units, image formats, Reset vs. Normalize CSS, CSS preprocessors, zero-runtime CSS, Core Web Vitals, and Chrome DevTools performance metrics. 15 questions.
+  </Accordion>
+  <Accordion title="TypeScript, bundling, and ecosystem tooling">
+    TypeScript types vs. interfaces, type assertions, `infer`, `satisfies`, tree shaking, module systems (CommonJS vs. ESM), bundlers, monorepos, package managers, CI/CD, Storybook, and debugging. 21 questions.
+  </Accordion>
+  <Accordion title="Network, security, and caching">
+    CORS, HTTP fundamentals, CDN, JWT, authentication and authorization, Cache-Control, ETags, stale-while-revalidate, TCP three-way handshake, TLS, OSI model, XSS, cookies and sessions. 20 questions.
+  </Accordion>
+  <Accordion title="Testing, quality, and engineering judgment">
+    E2E testing, TDD, testable code, cohesion and coupling, handling slow APIs, and dealing with third-party library bugs. 6 questions.
+  </Accordion>
+</AccordionGroup>
+
+### Backend
+
+<AccordionGroup>
+  <Accordion title="Spring and the application layer">
+    Spring MVC request flow, `@Controller` vs. `@RestController`, `@ExceptionHandler`, `ControllerAdvice`, Filter vs. Interceptor, AutoConfiguration, dependency injection, transaction propagation, AOP, and layered architecture. 21 questions.
+  </Accordion>
+  <Accordion title="Persistence and databases">
+    JPA, Hibernate, Spring Data JPA, entity management, N+1 problem, ID generation strategies, database indexes, transaction isolation levels, connection pooling, DB replication, ACID, normalization, optimistic vs. pessimistic locking, NoSQL types, and query optimization. 25 questions.
+  </Accordion>
+  <Accordion title="Networking and HTTP">
+    TCP three-way handshake, HTTP methods and idempotency, CORS, reverse vs. forward proxies, HTTPS and TLS, load balancing, REST, HTTP/1.1 vs. HTTP/2, DNS, CDN, cookies and sessions, and NAT. 25 questions.
+  </Accordion>
+  <Accordion title="Distributed systems, caching, and infrastructure">
+    Caching strategies, cache stampede, Redis and distributed locks, CAP theorem, CQRS, transactional outbox pattern, event sourcing, eventual consistency, CI/CD pipelines, zero-downtime deployment, IaC, serverless, and health checks. 17 questions.
+  </Accordion>
+  <Accordion title="OS, concurrency, and the JVM runtime">
+    Processes and threads, context switching, deadlocks, concurrency vs. parallelism, CPU scheduling, system calls, JVM garbage collection, memory allocation, ThreadLocal, thread pool saturation, coroutines, and multithreading. 22 questions.
+  </Accordion>
+  <Accordion title="Java language, collections, and data structures">
+    Checked vs. unchecked exceptions, first-class collections, `equals` and `hashCode`, identity vs. equality, hash collisions, generics (covariance, contravariance, invariance), `String` immutability, `try-with-resources`, binary trees, tries, linked lists, and time/space complexity. 21 questions.
+  </Accordion>
+  <Accordion title="Architecture, OOP, and design patterns">
+    SOLID principles, cohesion and coupling, strategy pattern, null object pattern, template method pattern, singleton pattern, OOP fundamentals, and Gradle. 9 questions.
+  </Accordion>
+  <Accordion title="Testing, security, and observability">
+    Unit vs. integration testing, TDD, test doubles, code coverage, test isolation, symmetric vs. asymmetric encryption, CSRF, JWT security considerations, SQL injection, and Micrometer. 11 questions.
+  </Accordion>
+</AccordionGroup>
+
+## Ready to start?
+
+<CardGroup cols={2}>
+  <Card title="How to use this archive" icon="map" href="/how-to-use">
+    Study strategies for getting the most out of 302 questions — by category, by weakness, or sequentially.
+  </Card>
+  <Card title="Browse frontend questions" icon="browser" href="/frontend/javascript/closures-and-scope">
+    Start with JavaScript fundamentals and work through to testing and quality.
+  </Card>
+  <Card title="Browse backend questions" icon="server" href="/backend/spring/mvc-and-request-handling">
+    Start with Spring and the application layer and work through to testing and observability.
+  </Card>
+</CardGroup>

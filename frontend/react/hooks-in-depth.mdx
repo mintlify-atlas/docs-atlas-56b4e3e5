@@ -1,0 +1,217 @@
+---
+title: "React hooks in depth: useEffect, useRef, and rules"
+description: "When React hooks run, useEffect vs useLayoutEffect timing, useRef vs plain variables, and why hooks cannot be called conditionally — with Q&A."
+---
+
+Hooks give function components access to state, side effects, and lifecycle behavior that previously required class components. Getting the most out of them requires understanding not just what each hook does, but when it runs, what constraints it operates under, and how it compares to simpler alternatives. The questions below cover the hooks that come up most often in technical interviews: `useEffect`, `useLayoutEffect`, `useRef`, and `useState` — with particular attention to edge cases and common misconceptions.
+
+<AccordionGroup>
+  <Accordion title="When is useEffect called?">
+    `useEffect` is tied to three distinct lifecycle moments:
+
+    **1. After initial mount**
+
+    `useEffect` runs after the component is rendered to the DOM for the first time. This is the right place for one-time initialization: fetching initial data, setting up subscriptions, or attaching event listeners.
+
+    ```jsx
+    useEffect(() => {
+      fetchUserData().then(data => setUser(data));
+    }, []); // Empty array → runs once, after first render
+    ```
+
+    **2. After dependencies change**
+
+    When a non-empty dependency array is provided, `useEffect` re-runs whenever one of the listed values changes. Before the new effect runs, React first calls the **cleanup function** returned by the previous effect — passing it the previous state and props.
+
+    ```jsx
+    useEffect(() => {
+      const subscription = subscribe(userId);
+      return () => subscription.unsubscribe(); // cleanup before next run
+    }, [userId]); // Re-runs every time userId changes
+    ```
+
+    **3. Before unmount**
+
+    When the component is removed from the tree, the cleanup function returned by the last `useEffect` call is invoked. Use it to remove event listeners, cancel timers, or unsubscribe from external sources.
+
+    ```jsx
+    useEffect(() => {
+      window.addEventListener('resize', handleResize);
+      return () => {
+        window.removeEventListener('resize', handleResize);
+      };
+    }, []);
+    ```
+
+    **No dependency array at all** means the effect runs after every render — usually a sign that the dependencies haven't been thought through carefully.
+
+    <Warning>
+      Omitting the dependency array entirely causes the effect to run on every render. This is rarely intentional and is a common source of infinite loops when the effect itself triggers a state update.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is the difference between useEffect and useLayoutEffect?">
+    Both hooks run after a render, but at different points in the pipeline and with different execution models.
+
+    **`useEffect`** runs **asynchronously** after the browser has painted the updated frame. The user sees the new UI before the effect executes. This makes it the right default for most side effects — data fetching, subscriptions, event listeners — where there's no need to block the paint.
+
+    ```jsx
+    useEffect(() => {
+      fetchData().then(data => setData(data));
+    }, []);
+    ```
+
+    **`useLayoutEffect`** runs **synchronously** after React applies DOM updates but **before** the browser paints. This means you can read layout information (dimensions, positions) and apply changes, and the user will never see the intermediate state — preventing visual flicker.
+
+    ```jsx
+    useLayoutEffect(() => {
+      const height = ref.current.offsetHeight;
+      setHeight(height); // Applied before paint — no flicker
+    }, []);
+    ```
+
+    | | `useEffect` | `useLayoutEffect` |
+    |---|---|---|
+    | Timing | After browser paint | After DOM update, before paint |
+    | Execution | Asynchronous | Synchronous |
+    | Use cases | Data fetching, subscriptions, event listeners | DOM measurement, layout adjustments |
+    | Performance risk | Low | High if the callback is slow (blocks paint) |
+
+    <Warning>
+      Because `useLayoutEffect` runs synchronously before the browser paints, expensive work inside it will delay the frame and degrade perceived performance. Use it only when you specifically need to read or write DOM layout before the user sees the result.
+    </Warning>
+
+    The practical rule: use `useEffect` by default. Switch to `useLayoutEffect` only when you observe visual flicker that stems from a layout measurement happening too late.
+  </Accordion>
+
+  <Accordion title="What is useRef and when should you use it?">
+    `useRef` returns a mutable container object (`{ current: value }`) that persists across renders without triggering re-renders when its value changes. It has two primary uses:
+
+    **1. Accessing DOM elements directly**
+
+    By passing a ref to a JSX element's `ref` prop, you get a direct reference to the underlying DOM node. This is the standard way to imperatively control focus, scroll position, or measure element dimensions.
+
+    ```jsx
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+      inputRef.current.focus(); // Focus the input on mount
+    }, []);
+
+    return <input ref={inputRef} />;
+    ```
+
+    **2. Storing mutable values that survive re-renders**
+
+    Unlike a regular variable declared inside the component function, a ref's value persists between renders. Unlike `useState`, updating a ref does not schedule a re-render. This makes it ideal for storing values that need to persist but whose changes shouldn't affect the UI — such as timer IDs.
+
+    ```jsx
+    const timerRef = useRef(null);
+
+    const startTimer = () => {
+      timerRef.current = setInterval(() => {
+        console.log('tick');
+      }, 1000);
+    };
+
+    const stopTimer = () => {
+      clearInterval(timerRef.current); // timerRef.current survived re-renders
+    };
+    ```
+
+    <Tip>
+      `useRef` is the right tool any time you need a value to persist across renders but don't want the update to cause a re-render. If the value change should affect the rendered output, use `useState` instead.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between useRef and a plain let variable?">
+    The key difference is **what happens during a re-render**.
+
+    A `let` variable declared inside a component function is **re-initialized on every render**. It has no memory of its previous value.
+
+    ```jsx
+    function Counter() {
+      let count = 0; // Reset to 0 on every render
+
+      const increment = () => {
+        count += 1;
+        console.log(count); // Shows 1 every time — never accumulates
+      };
+
+      return <button onClick={increment}>Increment</button>;
+    }
+    ```
+
+    A `useRef` value **persists across renders** and retains its last-written value:
+
+    ```jsx
+    function Counter() {
+      const countRef = useRef(0); // Persists between renders
+
+      const increment = () => {
+        countRef.current += 1;
+        console.log(countRef.current); // Accumulates correctly: 1, 2, 3...
+      };
+
+      return <button onClick={increment}>Increment</button>;
+    }
+    ```
+
+    **What about a `let` variable declared outside the component?**
+
+    An external `let` variable does survive re-renders — but this pattern has serious problems:
+
+    - Every instance of the component shares the same variable. Rendering `<Counter />` twice means both counters write to the same value.
+    - It behaves like a global variable, making state harder to trace and test.
+    - It violates React's unidirectional data flow principle by placing state outside React's lifecycle.
+
+    | | `let` inside component | `useRef` | `let` outside component |
+    |---|---|---|---|
+    | Survives re-renders | No | Yes | Yes |
+    | Triggers re-render on change | No | No | No |
+    | Shared across instances | No | No | **Yes** |
+    | React lifecycle aware | No | Yes | No |
+
+    Use `useRef` for instance-local persistent values. Reserve `useState` for values whose changes should drive UI updates.
+  </Accordion>
+
+  <Accordion title="Why can't you call useState inside a conditional?">
+    React tracks state by the **order in which hooks are called** during each render. Every time a component renders, React expects the same hooks to be called in the same sequence, so it can correctly map each `useState` call to its stored value.
+
+    Placing `useState` inside a conditional breaks this contract:
+
+    ```jsx
+    function Example({ shouldUseState }) {
+      if (shouldUseState) {
+        const [count, setCount] = useState(0); // Conditionally called
+      }
+      // Other hooks here...
+      return <div>Example</div>;
+    }
+    ```
+
+    When `shouldUseState` is `true`, the hook call list is: `[useState]`. When it becomes `false`, the list is: `[]`. React's internal hook index is now off by one. Any subsequent `useState` or `useEffect` calls in the same component will read from the wrong slot, producing incorrect state and potentially runtime errors.
+
+    The fix is always to call hooks unconditionally at the top level of the component function, then use the state value conditionally:
+
+    ```jsx
+    function Example({ shouldUseState }) {
+      const [count, setCount] = useState(0); // Always called
+
+      if (!shouldUseState) return <div>Skipped</div>;
+
+      return <div>{count}</div>; // Used conditionally
+    }
+    ```
+
+    This is one of the two fundamental Rules of Hooks: call hooks only at the top level (not inside conditions, loops, or nested functions), and only from React function components or custom hooks.
+
+    <Warning>
+      The React ESLint plugin (`eslint-plugin-react-hooks`) enforces the Rules of Hooks at lint time. Enabling it in your project catches these errors before they reach the browser.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Custom hooks are just functions whose names start with `use` and which call other hooks. They follow the same rules as built-in hooks and are the standard way to extract and share stateful logic between components.
+</Note>

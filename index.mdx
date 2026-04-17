@@ -1,97 +1,89 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Maeil Mail: Technical Interview Q&A Archive"
+description: "300+ curated technical interview questions and expert answers for frontend and backend engineers, organized by topic for focused preparation."
 ---
 
-## Setting up
+Maeil Mail (매일메일) was a daily email service delivering one technical interview question per day to software engineers preparing for interviews at Korean tech companies. This archive preserves all 300+ questions and detailed answers across frontend and backend engineering tracks — organized by topic so you can study exactly what you need.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Frontend Questions" icon="browser" href="/frontend/javascript/closures-and-scope">
+    150+ questions covering JavaScript, React, Next.js, CSS, browser internals, TypeScript, and web networking.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Backend Questions" icon="server" href="/backend/spring/mvc-and-request-handling">
+    152+ questions covering Spring, JPA, databases, Java, OS concepts, distributed systems, and design patterns.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="How to Use This Archive" icon="map" href="/how-to-use">
+    Learn the best study strategies for navigating questions by topic, difficulty, and category.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="About Maeil Mail" icon="envelope" href="/introduction">
+    The story behind the service and how this archive came to be.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Browse by topic
 
-Everything you need to create world-class documentation.
+### Frontend
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="JavaScript Fundamentals" icon="js" href="/frontend/javascript/closures-and-scope">
+    Closures, event loop, promises, prototypes, functional programming
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="React Core" icon="react" href="/frontend/react/rendering-and-lifecycle">
+    Rendering, hooks, state management, error boundaries, concurrent mode
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Next.js & Architecture" icon="layer-group" href="/frontend/nextjs/ssr-and-server-components">
+    SSR, server components, caching, middleware, PPR
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Browser & CSS" icon="palette" href="/frontend/browser/rendering-pipeline">
+    Rendering pipeline, DOM events, CSS layout, storage, Web APIs
   </Card>
-</Columns>
+  <Card title="TypeScript & Tooling" icon="wrench" href="/frontend/tooling/typescript-type-system">
+    Type system, bundlers, modules, testing, package managers
+  </Card>
+</CardGroup>
 
-## Need inspiration?
+### Backend
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={3}>
+  <Card title="Spring & Application Layer" icon="leaf" href="/backend/spring/mvc-and-request-handling">
+    MVC flow, dependency injection, transactions, AOP, exception handling
+  </Card>
+  <Card title="Persistence & Databases" icon="database" href="/backend/persistence/jpa-fundamentals">
+    JPA, Hibernate, transactions, query optimization, DB design
+  </Card>
+  <Card title="Networking & HTTP" icon="network-wired" href="/backend/network/http-and-rest">
+    HTTP/REST, security, authentication, proxies, load balancing
+  </Card>
+  <Card title="Distributed Systems" icon="diagram-project" href="/backend/infra/caching-strategies">
+    Caching, messaging, deployment, CAP theorem, distributed patterns
+  </Card>
+  <Card title="Java & OS Concepts" icon="java" href="/backend/java/language-fundamentals">
+    Java language, collections, OS concurrency, memory, scheduling
+  </Card>
+  <Card title="Architecture & Testing" icon="sitemap" href="/backend/architecture/oop-and-design-patterns">
+    OOP, design patterns, SOLID, testing strategies
+  </Card>
+</CardGroup>
+
+## How questions are structured
+
+Every question in this archive follows a consistent format designed to help you give strong interview answers:
+
+<Steps>
+  <Step title="Question">
+    The exact question as asked in real interviews at Korean tech companies.
+  </Step>
+  <Step title="Core answer">
+    A clear, direct explanation of the concept — written to match the depth expected in a technical interview.
+  </Step>
+  <Step title="Code examples">
+    Where applicable, concrete code that illustrates the concept in action.
+  </Step>
+  <Step title="Follow-up depth">
+    Additional nuance, edge cases, and real-world considerations that distinguish strong candidates.
+  </Step>
+</Steps>
+
+<Note>
+  This archive covers questions suitable for junior-to-senior frontend and backend engineers. Questions range from foundational concepts to advanced system design topics.
+</Note>

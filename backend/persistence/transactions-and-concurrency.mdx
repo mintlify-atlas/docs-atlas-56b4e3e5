@@ -1,0 +1,230 @@
+---
+title: 'Transactions and concurrency control in databases'
+description: 'ACID properties, isolation levels, locking strategies, MVCC, gap locks, and optimistic vs. pessimistic locking from the Maeil Mail interview archive.'
+---
+
+Transactions are the unit of reliability in relational databases. They group one or more operations so that the database moves from one consistent state to another, even in the presence of failures or concurrent access. Understanding transaction semantics — ACID, isolation levels, and locking — is one of the areas most heavily tested in backend interviews, because real-world bugs like race conditions, double charges, and lost updates are almost always transaction problems in disguise.
+
+<AccordionGroup>
+  <Accordion title="What is ACID and what does each property guarantee?">
+    ACID is an acronym for the four properties that define a reliable transaction: Atomicity, Consistency, Isolation, and Durability.
+
+    **Atomicity (원자성)** guarantees that every operation in a transaction either succeeds completely or is rolled back entirely. There is no partial success. A classic example is a bank transfer:
+
+    ```
+    1. Debit 3,000 won from account A
+    2. Credit 3,000 won to account B
+    ```
+
+    If step 2 fails, step 1 must be undone. The account balances cannot be left in a state where the money has left A but not arrived at B.
+
+    **Consistency (일관성)** guarantees that a transaction takes the database from one valid state to another. Constraints, foreign keys, and business rules defined in the schema must all be satisfied after the transaction commits. If a transaction would violate a constraint, it is rolled back.
+
+    **Isolation (격리성)** guarantees that concurrently running transactions do not see each other's intermediate states. From each transaction's perspective, it appears to be the only transaction running. In practice, strict isolation is expensive, so databases offer configurable isolation levels that trade some isolation for higher throughput.
+
+    A useful example: if two concurrent transactions are both reading the total balance of accounts A and B, each should always see a total of 10,000 won — even if, at the exact moment of reading, the money is mid-transfer and temporarily "missing" from both accounts.
+
+    **Durability (지속성)** guarantees that once a transaction is committed, its effects survive any subsequent failure — a crash, power loss, or hardware fault. Databases achieve this by writing to a transaction log (WAL) before confirming the commit. If the system crashes, the log is replayed on recovery.
+
+    <Note>
+      The CAP theorem describes a different trade-off in distributed systems. ACID applies primarily to single-node relational databases. Distributed systems often relax some ACID guarantees in favor of availability, leading to BASE (Basically Available, Soft state, Eventual consistency) semantics.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are transaction isolation levels and what anomalies do they prevent?">
+    Isolation levels define how much one transaction can see of another's in-progress work. Higher isolation means more consistency but lower throughput; lower isolation means higher concurrency but more anomalies.
+
+    The SQL standard defines four isolation levels:
+
+    | Isolation level | Dirty Read | Non-Repeatable Read | Phantom Read |
+    | --- | --- | --- | --- |
+    | READ UNCOMMITTED | Possible | Possible | Possible |
+    | READ COMMITTED | Prevented | Possible | Possible |
+    | REPEATABLE READ | Prevented | Prevented | Possible* |
+    | SERIALIZABLE | Prevented | Prevented | Prevented |
+
+    *MySQL InnoDB's REPEATABLE READ also prevents phantom reads via gap locks and MVCC.
+
+    **READ UNCOMMITTED** allows a transaction to read data that another transaction has modified but not yet committed. If that other transaction rolls back, the reader has seen data that never officially existed — a dirty read.
+
+    **READ COMMITTED** is the default in PostgreSQL and Oracle. A transaction only reads data from committed transactions. Dirty reads are prevented, but if you read the same row twice within one transaction and another transaction commits a change in between, the second read may return a different value — a non-repeatable read.
+
+    **REPEATABLE READ** is the default in MySQL InnoDB. Once a transaction reads a row, it will see the same value for that row for the duration of the transaction, even if another transaction commits an update. However, if another transaction inserts new rows that match your query's WHERE clause, those new rows may appear on a subsequent identical query — a phantom read. (InnoDB prevents this with gap locks.)
+
+    **SERIALIZABLE** is the strictest level. It locks entire ranges of rows so that no insertions or modifications can affect any query you have already executed. This prevents all anomalies but can severely limit concurrency.
+
+    **Three anomaly types explained:**
+
+    - **Dirty Read:** reading data that was modified by an uncommitted transaction and may later be rolled back.
+    - **Non-Repeatable Read:** reading the same row twice in one transaction and getting different values because another transaction committed a change between the two reads.
+    - **Phantom Read:** running the same range query twice in one transaction and getting a different set of rows because another transaction inserted or deleted rows between the two executions.
+
+    <Tip>
+      In Spring, you can set the isolation level per method: `@Transactional(isolation = Isolation.REPEATABLE_READ)`. Choose the weakest isolation that still satisfies your correctness requirements, since stronger isolation means more locking and lower throughput.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between a shared lock and an exclusive lock?">
+    Locks are the mechanism databases use to control concurrent access to the same data. In MySQL InnoDB (and most relational databases), there are two fundamental lock types.
+
+    **Shared lock (공유 락, S-Lock / Read Lock):** any number of transactions can hold a shared lock on the same row simultaneously. While a shared lock is held, other transactions can also acquire shared locks, but no transaction can acquire an exclusive lock. This guarantees that the data will not change for the duration of all shared lock holders.
+
+    ```sql Acquiring a shared lock
+    SELECT * FROM orders WHERE id = 1 FOR SHARE;
+    ```
+
+    **Exclusive lock (배타 락, X-Lock / Write Lock):** only one transaction can hold an exclusive lock on a row. While it is held, no other transaction can acquire either a shared or exclusive lock on the same row — they must wait.
+
+    ```sql Acquiring an exclusive lock
+    SELECT * FROM orders WHERE id = 1 FOR UPDATE;
+    ```
+
+    | | Shared lock held by others | Exclusive lock held by others |
+    | --- | --- | --- |
+    | Acquire shared lock | Allowed | Must wait |
+    | Acquire exclusive lock | Must wait | Must wait |
+
+    **Deadlocks** occur when two transactions each hold a lock the other needs:
+
+    1. Transaction A holds a shared lock on row 1 and wants row 2.
+    2. Transaction B holds a shared lock on row 2 and wants row 1.
+    3. Both transactions wait forever.
+
+    Prevention strategies:
+    - **Consistent lock ordering:** always acquire locks in the same order across all transactions (e.g., always lock row 1 before row 2). This eliminates circular waits.
+    - **Lock timeouts:** configure `innodb_lock_wait_timeout` so that a waiting transaction aborts after a set time rather than waiting forever.
+
+    <Note>
+      MySQL's consistent nonlocking reads (MVCC snapshots) mean that a plain `SELECT` without `FOR SHARE` or `FOR UPDATE` does not acquire a lock at all, and is not blocked by an exclusive lock elsewhere. Only locking reads (and writes) compete for locks.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is MVCC and how does it compare to lock-based concurrency control?">
+    Two major concurrency control strategies exist in database systems: **MVCC (Multi-Version Concurrency Control)** and **lock-based concurrency control**.
+
+    **MVCC** maintains multiple versions of each row. When a transaction reads data, it reads from a consistent snapshot taken at the start of the transaction — it never sees in-progress changes by other transactions. Because reads operate on historical snapshots, they do not acquire locks and therefore never block writes, and writes never block reads.
+
+    Key characteristics of MVCC:
+    - High read concurrency: reads and writes do not block each other
+    - Consistent snapshots: each transaction sees a stable view of the database
+    - More storage overhead: old row versions must be retained until no active transaction references them (InnoDB's undo log handles this)
+    - Phantom reads can be further prevented by gap locks and next-key locks
+
+    **Lock-based concurrency control** uses shared and exclusive locks to serialize access. A reading transaction holds a shared lock; a writing transaction holds an exclusive lock. This prevents conflicts but means:
+    - High contention on popular rows can cause significant wait times
+    - Lock ordering bugs lead to deadlocks
+    - Reads can be blocked by writes and vice versa
+
+    **How MySQL InnoDB combines both:** InnoDB uses MVCC for reads and locks for writes.
+
+    - `SELECT` (non-locking reads): served from the MVCC snapshot — no locks acquired, not blocked by writers
+    - `INSERT`, `UPDATE`, `DELETE`, `SELECT ... FOR UPDATE/FOR SHARE`: acquire locks to protect write integrity
+
+    This hybrid approach gives InnoDB high read throughput while maintaining write consistency.
+
+    <Tip>
+      If you are asked in an interview "how does MySQL handle high read concurrency?", the answer is MVCC: reads take a consistent snapshot rather than acquiring shared locks, so they never contend with concurrent writers.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are gap locks and next-key locks, and how do they prevent phantom reads?">
+    MySQL InnoDB uses two special lock types to prevent phantom reads at the REPEATABLE READ isolation level.
+
+    **Phantom Read** occurs when a transaction runs the same range query twice and the second execution returns rows that did not exist in the first — because another transaction inserted them in between.
+
+    ```sql Phantom read scenario
+    -- Transaction A, first query
+    START TRANSACTION;
+    SELECT * FROM orders WHERE amount > 150;
+    -- Returns rows with amounts 200, 300
+
+    -- Transaction B inserts a new row and commits
+    START TRANSACTION;
+    INSERT INTO orders (customer_id, amount) VALUES (4, 250);
+    COMMIT;
+
+    -- Transaction A, second query — without gap locks, row 250 would appear
+    SELECT * FROM orders WHERE amount > 150;
+    ```
+
+    **Gap Lock (갭 락):** locks the *gap* between indexed values rather than a specific record. For example, locking the gap between ids 3 and 5 prevents any transaction from inserting a row with id 4. Gap locks are applied when no matching record exists in the queried range.
+
+    ```sql Gap lock example (ids 1, 3, 5 exist)
+    START TRANSACTION;
+
+    -- Acquires a next-key lock on the record with id=3
+    -- and gap locks on the ranges (1, 3) and (3, 5)
+    SELECT * FROM orders WHERE orders_id BETWEEN 2 AND 4 FOR UPDATE;
+
+    -- In another transaction, this insert is blocked:
+    -- INSERT INTO orders (orders_id, orders_amount) VALUES (4, 200);
+    ```
+
+    **Next-Key Lock (넥스트키 락):** combines a record lock on a specific index entry with a gap lock on the preceding gap. It locks both the record itself and the space before it, preventing insertions that would cause the locked record to shift in the index.
+
+    ```sql Next-key lock example
+    -- orders table: ids 1 (100), 2 (200), 3 (300)
+    START TRANSACTION;
+
+    -- Acquires next-key lock on record id=2 and gap locks on (1,2) and (2,3)
+    SELECT * FROM orders WHERE orders_amount = 200 FOR UPDATE;
+
+    -- This insert in another transaction is blocked:
+    -- INSERT INTO orders (orders_id, orders_amount) VALUES (4, 200);
+    ```
+
+    **How they prevent phantom reads:** once transaction A sets a gap lock or next-key lock on a range, transaction B cannot insert new rows into that range. When transaction A re-runs the same query, no new rows appear — the phantom is eliminated.
+
+    <Note>
+      Gap locks can sometimes block insertions that seem unrelated to the original query, which can cause unexpected contention. They are only used at REPEATABLE READ and SERIALIZABLE levels; at READ COMMITTED, gap locks are not used.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between optimistic and pessimistic locking?">
+    Optimistic and pessimistic locking are application-level strategies for handling concurrent modifications to the same data.
+
+    **Optimistic locking (낙관적 락)** assumes that conflicts are rare. It does not acquire any database lock when reading data. Instead, it uses a version column to detect conflicts at write time: if another transaction has modified the row since you read it, the version number will have changed, and your update is rejected.
+
+    ```java Optimistic locking with @Version in JPA
+    @Entity
+    public class Ticket {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        private int quantity;
+
+        @Version
+        private Long version;  // automatically incremented on each update
+    }
+    ```
+
+    When two transactions try to update the same `Ticket`, the one that commits second will find a version mismatch and receive an `OptimisticLockException`. The application is responsible for handling this — usually by retrying or surfacing the conflict to the user.
+
+    **Pessimistic locking (비관적 락)** assumes that conflicts are likely. It acquires a database lock (shared or exclusive) at read time, so no other transaction can modify the row until the lock is released.
+
+    ```java Pessimistic locking with JPA
+    // Acquires SELECT ... FOR UPDATE (exclusive lock)
+    Ticket ticket = em.find(Ticket.class, id, LockModeType.PESSIMISTIC_WRITE);
+    ```
+
+    **Comparison:**
+
+    | | Optimistic | Pessimistic |
+    | --- | --- | --- |
+    | Lock acquired on read? | No | Yes |
+    | Conflict detection | At commit time (version check) | At lock acquisition time |
+    | Performance under low contention | Higher (no waiting) | Lower (lock overhead) |
+    | Performance under high contention | Lower (many retries) | More predictable latency |
+    | Conflict handling | Application must retry | Database serializes access |
+
+    **When to use each:**
+    - **Optimistic:** read-heavy workloads, occasional updates, cases where showing a conflict to the user is acceptable (e.g., wiki edits, shopping cart updates)
+    - **Pessimistic:** financial transactions, inventory deductions, any scenario where data integrity is critical and conflicts are frequent enough that retries would be expensive
+
+    <Tip>
+      MySQL supports consistent nonlocking reads (`SELECT` without `FOR UPDATE`). An X-Lock from pessimistic locking does not block plain `SELECT` statements — only locking reads and writes are blocked. This reduces contention compared to databases that do not support MVCC.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

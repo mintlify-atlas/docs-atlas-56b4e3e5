@@ -1,0 +1,307 @@
+---
+title: "DOM and Events Browser Interview Questions"
+description: "Essential interview Q&A on DOM structure, event propagation, bubbling, capturing, event delegation, data attributes, and web standards."
+---
+
+The Document Object Model and the browser event system are foundational to every interactive web application. Interviewers frequently test understanding of how events travel through the DOM tree, the relationship between `Node` and `Element`, the role of the HTML `<!DOCTYPE>` declaration, and how browsers implement web standards. This page gathers the most commonly asked questions in this area.
+
+<AccordionGroup>
+  <Accordion title="What is event propagation, and what are its three phases?">
+    Event propagation describes the path an event travels through the DOM tree after it is triggered. There are three phases:
+
+    **1. Capturing phase**
+
+    The event starts at the top of the DOM tree (`document`) and travels downward toward the target element. Event listeners registered with `{ capture: true }` fire during this phase.
+
+    **2. Target phase**
+
+    The event reaches the element on which it was originally triggered. Listeners attached to that element fire at this point.
+
+    **3. Bubbling phase**
+
+    After reaching the target, the event travels back up the tree toward `document`. This is the default phase in which most listeners fire.
+
+    ```javascript
+    // Fires during the bubbling phase (default)
+    element.addEventListener('click', handler);
+
+    // Fires during the capturing phase
+    element.addEventListener('click', handler, { capture: true });
+    ```
+
+    To stop an event from continuing to propagate, call `event.stopPropagation()`. To prevent the browser's default behavior (such as following a link or submitting a form), call `event.preventDefault()`.
+
+    <Note>
+      Most events bubble, but some — like `focus`, `blur`, and `load` — do not. Always verify whether a specific event bubbles before relying on delegation.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between event bubbling and event capturing, and when would you use each?">
+    **Event bubbling** propagates from the innermost target element outward to ancestor elements. This is the browser default, and it is what makes **event delegation** possible.
+
+    **Event capturing** propagates from the outermost ancestor inward toward the target. It is inactive by default and must be opted into via the third argument of `addEventListener`.
+
+    ```javascript
+    // Bubbling (default): fires as the event travels up
+    parent.addEventListener('click', (e) => {
+      console.log('parent caught the click (bubble)');
+    });
+
+    // Capturing: fires as the event travels down
+    parent.addEventListener('click', (e) => {
+      console.log('parent caught the click (capture)');
+    }, true);
+    ```
+
+    **Event delegation** leverages bubbling to handle events from many child elements using a single listener on a parent:
+
+    ```javascript
+    // Instead of attaching a listener to every <li>:
+    document.querySelector('ul').addEventListener('click', (e) => {
+      if (e.target.tagName === 'LI') {
+        console.log('clicked item:', e.target.textContent);
+      }
+    });
+    ```
+
+    This pattern is especially useful when child elements are added dynamically, because new children inherit the parent's listener automatically.
+
+    **When to use capturing:** when a parent must react to an event before any child handler runs — for example, implementing global logging or analytics that must not be blocked by `stopPropagation` calls in child components.
+
+    <Tip>
+      Prefer bubbling (delegation) for most UI interactions. Reserve capturing for cross-cutting concerns like tracking or access control that need to intercept events before children process them.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between event.target and event.currentTarget?">
+    Both are properties on the event object, but they point to different elements:
+
+    - **`event.target`** — the element on which the event *originally occurred* (the element the user interacted with).
+    - **`event.currentTarget`** — the element to which the *event listener is attached* (the element currently handling the event).
+
+    These values differ when event bubbling is involved. Consider a `<div>` wrapping a `<button>`, with the click listener on the `<div>`:
+
+    ```javascript
+    const div = document.querySelector('div');
+
+    div.addEventListener('click', (e) => {
+      console.log(e.target);        // <button> — where the click happened
+      console.log(e.currentTarget); // <div>    — where the listener lives
+    });
+    ```
+
+    When the user clicks the button, the event bubbles up to the `<div>`. Inside the handler, `target` is the `<button>` while `currentTarget` is the `<div>`.
+
+    This distinction matters in event delegation: use `e.target` to determine which child triggered the event, and `e.currentTarget` to reference the container element that owns the listener.
+  </Accordion>
+
+  <Accordion title="What is the difference between Node and Element in the DOM?">
+    **Node** is the base interface for every object in the DOM tree. There are several node types:
+
+    | Node type | Example |
+    |---|---|
+    | `Document` | The root `document` object |
+    | `Element` | `<div>`, `<p>`, `<span>` |
+    | `Text` | The text content between tags |
+    | `Comment` | `<!-- a comment -->` |
+
+    **Element** is a specific subtype of Node. It represents HTML or XML tags and exposes HTML-specific APIs such as `id`, `className`, `style`, `querySelector()`, and `innerHTML`.
+
+    The key rule: **every Element is a Node, but not every Node is an Element.**
+
+    ```javascript
+    // Given: <div>Hello<!--comment-->World</div>
+
+    const div = document.querySelector('div');
+
+    div.childNodes; // NodeList: [Text("Hello"), Comment, Text("World")]
+    div.children;   // HTMLCollection: [] — no Element children
+    ```
+
+    - `childNodes` (Node property) returns *all* child nodes: text nodes, comments, and elements.
+    - `children` (Element property) returns only child *Element* nodes.
+
+    Similarly, `textContent` is a `Node` property (available everywhere), while `innerHTML` is an `Element` property (only on tags).
+  </Accordion>
+
+  <Accordion title="What is the HTML DOCTYPE declaration and why is it required?">
+    The `<!DOCTYPE>` declaration appears at the very top of an HTML document and tells the browser which version of HTML the document uses. It is not an HTML tag — it is a processing instruction.
+
+    In HTML5, the declaration is simply:
+
+    ```html
+    <!DOCTYPE html>
+    ```
+
+    Earlier HTML versions required verbose declarations that referenced a DTD (Document Type Definition):
+
+    ```html
+    <!-- HTML 4.01 Strict — no longer needed in HTML5 -->
+    <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+      "http://www.w3.org/TR/html4/strict.dtd">
+    ```
+
+    **Why it matters:** without a DOCTYPE, browsers fall back to **quirks mode** — a legacy rendering mode that mimics the inconsistent behavior of old browsers to preserve compatibility with decade-old websites. Quirks mode can produce unexpected layout and style results. Including `<!DOCTYPE html>` ensures the browser uses **standards mode**, which provides consistent, spec-compliant rendering.
+
+    <Warning>
+      Always include `<!DOCTYPE html>` as the very first line of every HTML document. Omitting it is a common cause of subtle cross-browser layout bugs.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are HTML data attributes and how do you use them?">
+    Data attributes let you embed custom, application-specific data directly on HTML elements without using non-standard attributes or hidden fields. Any attribute prefixed with `data-` is a valid data attribute.
+
+    ```html
+    <div data-user-id="12345" data-role="admin">User card</div>
+    ```
+
+    **Accessing data attributes in JavaScript** uses the `dataset` object. Hyphenated attribute names are automatically converted to camelCase:
+
+    ```javascript
+    const card = document.querySelector('div');
+
+    console.log(card.dataset.userId); // "12345"
+    console.log(card.dataset.role);   // "admin"
+
+    // Write a value
+    card.dataset.role = 'moderator';
+    ```
+
+    **Using data attributes in CSS:**
+
+    ```css
+    /* Attribute selector */
+    article[data-columns="3"] {
+      width: 400px;
+    }
+
+    /* attr() function in generated content */
+    article::before {
+      content: attr(data-parent);
+    }
+    ```
+
+    Data attributes are commonly used to pass information from the server-rendered HTML into client-side JavaScript — for example, encoding a record ID on a button so the click handler knows which record to act on.
+  </Accordion>
+
+  <Accordion title="What is stacking context and how does z-index work within it?">
+    A **stacking context** is an independent three-dimensional space in which elements are stacked along the z-axis. Elements within a stacking context are compared against each other for stacking order, but they are never compared directly against elements in a *different* stacking context.
+
+    By default, elements stack in DOM order — elements appearing later in the source are painted on top of earlier ones. Positioned elements use `z-index` to control their stacking order within a context.
+
+    **Conditions that create a new stacking context (common cases):**
+
+    1. `position: relative` or `absolute` with a `z-index` value other than `auto`
+    2. `position: fixed` or `sticky`
+    3. `display: flex` or `grid` parent with `z-index` set on the child
+    4. `opacity` less than `1`
+    5. `transform`, `filter`, or `backdrop-filter` applied
+
+    **Practical example:**
+
+    ```html
+    <div style="position: relative; z-index: 1;">
+      A (z-index: 1)
+      <div style="position: absolute; z-index: 999;">
+        A-1 (z-index: 999)
+      </div>
+    </div>
+
+    <div style="position: relative; z-index: 2;">
+      B (z-index: 2)
+    </div>
+    ```
+
+    Stacking order from bottom to top: **A → A-1 → B**
+
+    Even though A-1 has `z-index: 999`, it lives inside A's stacking context (z-index 1). B has z-index 2 in the root context, which beats A's entire context. A-1 can never appear above B regardless of its z-index value.
+
+    <Warning>
+      A high `z-index` does not guarantee an element appears on top if it is trapped inside a stacking context with a lower z-index than a sibling context. Always inspect which stacking contexts exist in your component tree when debugging z-index issues.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the differences between preconnect, preload, and prefetch?">
+    All three are `<link>` `rel` values that hint to the browser to fetch or prepare resources earlier than it would otherwise. They differ in *what* they prepare and *when* that resource is needed.
+
+    **`preconnect`** — establishes a connection to an origin (DNS lookup + TCP handshake + TLS handshake) without fetching any resource. Use it for external origins you will definitely request from:
+
+    ```html
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin="anonymous">
+    ```
+
+    **`preload`** — fetches a specific resource at high priority and stores it in the cache before it is needed. Use it for critical resources that are discovered late in the rendering process (fonts, hero images, late-discovered scripts):
+
+    ```html
+    <link rel="preload" href="/fonts/my-font.woff2" as="font" crossorigin="anonymous">
+    ```
+
+    **`prefetch`** — fetches a resource at low priority in anticipation of a *future* navigation. The browser may defer it until the current page is idle:
+
+    ```html
+    <link rel="prefetch" href="/next-page.css" as="style">
+    ```
+
+    | | `preconnect` | `preload` | `prefetch` |
+    |---|---|---|---|
+    | What it does | Opens connection | Fetches resource | Fetches resource |
+    | When needed | Current page | Current page | Future page |
+    | Priority | High | High | Low |
+
+    <Tip>
+      Use `preconnect` for CDN or API origins. Use `preload` for above-the-fold fonts and critical CSS/JS. Use `prefetch` for resources needed on the next page the user is likely to visit.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the purpose of the alt attribute on images?">
+    The `alt` attribute serves three distinct purposes:
+
+    **1. Fallback text when the image cannot load**
+
+    If a network error or broken URL prevents the image from loading, the browser displays the `alt` text in place of the image, preserving the meaning of the content.
+
+    **2. Accessibility**
+
+    Screen readers read the `alt` text aloud to visually impaired users. Descriptive `alt` text is what makes image content accessible regardless of how the page is consumed.
+
+    **3. SEO**
+
+    Search engines cannot see images visually. They rely on `alt` text to understand image content and factor it into search rankings and image search results.
+
+    ```html
+    <!-- Informative image: describe the content -->
+    <img src="chart.png" alt="Bar chart showing monthly sales growth from Q1 to Q4 2025">
+
+    <!-- Decorative image: empty alt so screen readers skip it -->
+    <img src="divider.png" alt="">
+    ```
+
+    <Note>
+      Leaving `alt` off entirely is different from setting `alt=""`. An absent `alt` attribute forces screen readers to announce the filename. An empty `alt=""` signals that the image is decorative and should be ignored.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are web standards and why do they matter?">
+    Web standards are a set of specifications and guidelines — defined by bodies such as the W3C and IETF — that describe how web technologies (HTML, CSS, JavaScript, accessibility, security) should behave across all browsers and devices.
+
+    **Why they matter:**
+
+    - **Cross-browser consistency.** Code written to a standard works the same in Chrome, Firefox, Safari, and Edge without browser-specific workarounds.
+    - **Developer efficiency.** You write a feature once and it works everywhere, eliminating the need to maintain browser-specific versions.
+    - **User experience.** Users get consistent, accessible content regardless of which browser or device they use.
+    - **Longevity.** Standards-compliant code is more likely to continue working as browsers evolve.
+
+    ```html
+    <!-- Semantic HTML is part of web standards -->
+    <header>
+      <nav>...</nav>
+    </header>
+    <main>
+      <article>...</article>
+    </main>
+    <footer>...</footer>
+    ```
+
+    **Consequences of ignoring standards:** layouts break in certain browsers, security vulnerabilities emerge from non-standard behavior, and accessibility tools (screen readers, voice assistants) may fail to interpret the page correctly.
+  </Accordion>
+</AccordionGroup>

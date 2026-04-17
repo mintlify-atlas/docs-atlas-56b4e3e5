@@ -1,0 +1,354 @@
+---
+title: "OS Concurrency and Threads: Interview Q&A"
+description: "Interview questions on synchronous vs asynchronous execution, concurrency vs parallelism, deadlocks, race conditions, thread pools, coroutines, and ThreadLocal."
+---
+
+Concurrency is one of the most heavily tested areas in backend engineering interviews, and for good reason: getting it wrong causes subtle, hard-to-reproduce bugs in production. This page collects the most common questions from the Maeil Mail archive, tracing the topic from the basics of sync/async and single-process systems, through threading models and context switching, to practical Java patterns like `ThreadLocal` and thread pool saturation policies.
+
+<AccordionGroup>
+
+  <Accordion title="What is the difference between synchronous and asynchronous execution?">
+    In **synchronous** execution, the caller waits for the called function to complete before continuing. Work proceeds strictly in sequence: A calls B, A blocks until B finishes, then A resumes.
+
+    In **asynchronous** execution, the caller does not wait. A calls B and immediately continues its own work; B runs independently and notifies A (via callback, future, or event) when it is done.
+
+    **Blocking vs synchronous** — these are related but distinct:
+    - *Synchronous* describes the ordering relationship between tasks.
+    - *Blocking* describes whether a thread's execution is halted while waiting. A synchronous call is typically blocking, but a non-blocking synchronous call is possible (polling for completion without yielding the thread).
+
+    **Async in Spring** — `@Async` executes a method in a separate thread managed by a thread pool:
+
+    ```java
+    @Service
+    public class MailService {
+        @Async
+        public void sendWelcomeEmail(String address) {
+            // runs in a pool thread, caller returns immediately
+        }
+    }
+    ```
+
+    Important caveats with `@Async`:
+    - Exceptions thrown inside an `@Async` method are not propagated to the caller; configure an `AsyncUncaughtExceptionHandler`.
+    - `@Async` is proxy-based, so self-invocation (calling an `@Async` method from within the same bean) bypasses the proxy and runs synchronously.
+    - Transactions created inside `@Async` are independent of the caller's transaction.
+  </Accordion>
+
+  <Accordion title="Does more threads, processes, or cores always mean better performance?">
+    Not necessarily. Each resource has diminishing returns and specific failure modes.
+
+    **Too many threads:**
+    - The OS spends more time on context switching between threads than on actual work.
+    - Threads compete for memory, CPU caches, and locks — increasing the risk of deadlocks and reducing throughput.
+    - More threads means more shared mutable state to synchronise, increasing bug surface.
+
+    **Too many processes:**
+    - Each process has its own isolated memory space: high process count leads to rapid memory exhaustion.
+    - Process creation is expensive (OS must allocate memory, file descriptors, etc.).
+    - Inter-process communication (IPC) adds latency; context switching between processes is heavier than between threads because the memory address space must be swapped.
+    - Operating systems impose limits on concurrent processes; exceeding them causes failures.
+
+    **Many cores with poorly parallelised code:**
+    - Extra cores help only if the software can distribute work across them. A single-threaded application uses one core regardless of how many are available.
+    - More cores increase hardware cost, power consumption, and thermal management complexity.
+
+    The practical takeaway: match the degree of concurrency to the workload. Use thread pools sized to the problem (CPU-bound vs I/O-bound) rather than creating threads without limit.
+  </Accordion>
+
+  <Accordion title="What is the difference between concurrency and parallelism?">
+    **Concurrency** is the ability to handle multiple tasks by interleaving their execution on a single core. Tasks are not literally simultaneous; they take turns on the CPU via context switching. The goal is to keep the CPU busy during I/O waits and to give users the illusion of simultaneous progress.
+
+    **Parallelism** is the ability to execute multiple tasks literally at the same time on multiple cores. Each core runs an independent thread without time-sharing.
+
+    | | Concurrency | Parallelism |
+    |---|---|---|
+    | Physical simultaneity | No | Yes |
+    | Requires multiple cores | No | Yes |
+    | Primary benefit | Responsiveness, CPU utilisation during I/O | Throughput for CPU-bound work |
+    | Main risk | Deadlock, race conditions, starvation | Synchronisation overhead |
+
+    A server handling thousands of HTTP requests typically relies on concurrency (context-switching between requests during I/O) rather than parallelism. Numerical simulations and image processing benefit from parallelism.
+
+    <Note>
+      Concurrency and parallelism are not mutually exclusive: a multi-core server can be both concurrent (many tasks interleaved on each core) and parallel (multiple cores active simultaneously).
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is context switching and why is thread context switching faster than process context switching?">
+    **Context switching** is the mechanism by which the OS kernel saves the current state of a running process or thread (its *context* — CPU registers, program counter, stack pointer) and restores the state of the next one scheduled to run. It is what makes multitasking possible on a single core.
+
+    **When context switching occurs:**
+    - A thread exhausts its time slice (quantum).
+    - A thread blocks on I/O.
+    - A higher-priority task becomes runnable.
+
+    **Process context switch (threads in different processes):**
+    1. Save all CPU registers for the current process.
+    2. Load registers for the next process.
+    3. Switch the virtual memory address space.
+    4. Flush the TLB (Translation Lookaside Buffer) — the cache of virtual-to-physical address mappings — because the new process has a different address space.
+
+    **Thread context switch (threads in the same process):**
+    1. Save CPU register state for the current thread.
+    2. Load register state for the next thread.
+    3. *No memory address space change.* Threads share the same heap, so the MMU and TLB do not need to be updated.
+
+    The absence of TLB flushing makes thread context switching significantly cheaper than process context switching. Failing to flush the TLB on a process switch would allow the incoming process to access the outgoing process's memory — a critical security hazard.
+  </Accordion>
+
+  <Accordion title="What is a deadlock and how can it be prevented in Java?">
+    A **deadlock** occurs when two or more threads each hold a resource the other needs, and neither will release until it acquires the other's resource. The result is permanent standstill.
+
+    **Four necessary conditions (Coffman conditions)** — all four must hold simultaneously:
+
+    1. **Mutual exclusion** — a resource is held exclusively by one thread.
+    2. **Hold and wait** — a thread holds at least one resource while waiting for another.
+    3. **No preemption** — resources cannot be forcibly taken; they must be released voluntarily.
+    4. **Circular wait** — a circular chain of threads exists, each waiting for the next.
+
+    Eliminating any one condition prevents deadlock.
+
+    **Java example and fix:**
+
+    ```java
+    // Deadlock-prone
+    // Thread 1                      Thread 2
+    synchronized (resource1) {       synchronized (resource2) {
+        synchronized (resource2) {}      synchronized (resource1) {}
+    }                                }
+
+    // Fix: acquire locks in a consistent order in all threads
+    synchronized (resource1) {
+        synchronized (resource2) { ... }
+    }
+    ```
+
+    **Alternative approaches with `ReentrantLock`:**
+
+    ```java
+    // tryLock with timeout — avoids indefinite waiting
+    if (lock1.tryLock(50, TimeUnit.MILLISECONDS)) {
+        try {
+            if (lock2.tryLock(50, TimeUnit.MILLISECONDS)) {
+                try { /* critical section */ }
+                finally { lock2.unlock(); }
+            }
+        } finally { lock1.unlock(); }
+    }
+
+    // lockInterruptibly — allows interrupting a deadlocked thread
+    lock.lockInterruptibly();
+    ```
+  </Accordion>
+
+  <Accordion title="What is a race condition, and how do atomicity and visibility relate to it?">
+    A **race condition** occurs when two or more threads access shared data concurrently and the final result depends on the order of their execution. It can only be fully eliminated when both **atomicity** and **visibility** are guaranteed.
+
+    **Atomicity** — an operation is atomic if it completes as a single, indivisible unit. The increment `i++` looks like one statement but compiles to three CPU instructions:
+
+    1. Read `i` from memory.
+    2. Add 1.
+    3. Write the result back.
+
+    If two threads interleave these steps, one thread's write can be lost:
+
+    ```
+    Thread 1: read i = 0
+    Thread 2: read i = 0
+    Thread 1: write i = 1
+    Thread 2: write i = 1   ← Thread 1's increment is lost; expected i = 2
+    ```
+
+    **Visibility** — when one thread writes to a shared variable, that change may remain in the CPU's local cache and not be immediately visible to other threads running on different cores.
+
+    **Java solutions:**
+
+    | Tool | Atomicity | Visibility |
+    |---|---|---|
+    | `synchronized` | Yes | Yes |
+    | `ReentrantLock` | Yes | Yes |
+    | `AtomicInteger` (CAS) | Yes | Yes |
+    | `volatile` | No | Yes (single writer only) |
+
+    ```java
+    // Atomic class — lock-free, uses Compare-And-Swap
+    AtomicInteger counter = new AtomicInteger(0);
+    counter.incrementAndGet(); // atomic read-modify-write
+
+    // volatile — ensures visibility but NOT atomicity
+    volatile boolean flag = false; // safe only for single-writer scenarios
+    ```
+  </Accordion>
+
+  <Accordion title="What are the limitations of single-process systems and how did multi-programming and multi-tasking address them?">
+    A **single-process system** runs one program at a time. To run a second program, the first must finish. When the running process performs I/O (disk, network), the CPU sits idle — a waste of the most expensive resource in the system.
+
+    **Multi-programming** addressed CPU idleness: when one process blocks on I/O, a different process is scheduled on the CPU. The primary goal is maximising CPU utilisation. The limitation is that if a CPU-bound process never blocks, it monopolises the CPU indefinitely.
+
+    **Multi-tasking** (time-sharing) solved that: each process is given a short time slice (quantum). When the slice expires, the OS preempts the process and schedules the next one. This creates the appearance of simultaneous execution from the user's perspective and prevents any single process from starving others.
+
+    | System | Primary goal | Limitation |
+    |---|---|---|
+    | Single-process | Simplicity | CPU idle during I/O |
+    | Multi-programming | CPU utilisation | CPU-bound tasks can monopolise |
+    | Multi-tasking | Responsiveness | Still limited to one task per process |
+  </Accordion>
+
+  <Accordion title="What are the remaining limitations of multi-tasking and how did threads solve them?">
+    Even with multi-tasking (multiple processes time-sharing the CPU), three problems remain:
+
+    1. **A single process cannot perform multiple tasks simultaneously** — creating multiple processes is one workaround, but processes are heavyweight and expensive to manage.
+    2. **Process context switching is costly** — saving and restoring the full address space, including TLB flush, takes significant time.
+    3. **Data sharing between processes is awkward** — each process has its own isolated address space; IPC mechanisms (pipes, sockets, shared memory) add complexity and latency.
+
+    **Threads** address all three:
+
+    1. A single process can contain multiple threads, each executing a distinct task concurrently.
+    2. Thread context switching is cheaper than process switching because threads in the same process share the heap; only the stack, registers, and program counter differ per thread.
+    3. Threads share the same heap, making data sharing trivial — though this also introduces the need for synchronisation.
+
+    Each thread owns:
+    - Its own **stack** (local variables, call frames)
+    - Its own **program counter** and **registers**
+
+    All threads in a process share:
+    - The **heap** (dynamically allocated objects)
+    - **Code** (method bytecode)
+    - **Static fields** and open file handles
+
+    <Warning>
+      Shared heap memory is the source of race conditions and deadlocks. Never assume that data shared between threads is safe without explicit synchronisation.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What are the key characteristics of multi-threading?">
+    **Multi-threading** runs multiple threads within a single process concurrently, combining the responsiveness of multi-tasking with the efficiency of shared memory.
+
+    **Lightweight execution units** — thread context switching saves and restores only the stack and registers, not the entire address space. Switching is significantly faster than between processes.
+
+    **Efficient data sharing** — threads share the heap directly. No IPC is needed for intra-process communication, though concurrent access still requires synchronisation.
+
+    **Improved responsiveness** — I/O-bound work can run on background threads, leaving the main thread free for user interactions. On multi-core hardware, each thread can be pinned to a separate core for true parallelism.
+
+    **Known risks:**
+    - **Race conditions** — concurrent reads and writes to shared state without synchronisation.
+    - **Deadlocks** — circular lock dependencies that cause threads to wait forever.
+    - **Resource exhaustion** — uncontrolled thread creation consumes memory (each thread allocates stack space) and eventually crashes the JVM.
+
+    Effective multi-threading requires careful design: prefer immutability, minimise shared mutable state, and use thread pools to bound resource usage.
+  </Accordion>
+
+  <Accordion title="What is ThreadLocal and when should you use it?">
+    `ThreadLocal<T>` gives each thread its own isolated copy of a variable. Threads never see each other's values, so no synchronisation is needed:
+
+    ```java
+    ThreadLocal<String> requestId = new ThreadLocal<>();
+
+    // In a request-handling thread:
+    requestId.set(UUID.randomUUID().toString());
+
+    // Later in the same thread (even deep in the call stack):
+    String id = requestId.get(); // always this thread's value
+
+    // Clean up when the thread's work is done:
+    requestId.remove();
+    ```
+
+    Internally, each `Thread` object holds a `ThreadLocalMap`. A `ThreadLocal` instance acts as the key; the value is the per-thread data.
+
+    **Spring uses `ThreadLocal` extensively:**
+    - `TransactionSynchronizationManager` — tracks the active database connection per thread.
+    - `SecurityContextHolder` — stores the authenticated principal.
+    - `RequestContextHolder` — holds the current `HttpServletRequest`.
+
+    **Critical caveats:**
+
+    | Risk | Consequence | Fix |
+    |---|---|---|
+    | Thread pool reuse | A pooled thread retains its previous `ThreadLocal` value | Call `remove()` at the end of every request |
+    | `@Async` methods | Run on a different thread; cannot see the caller's `ThreadLocal` | Use `TaskDecorator` (Spring 4.3+) to copy values |
+
+    <Warning>
+      Forgetting to call `remove()` in a thread pool environment is one of the most common causes of data leaks between requests. Always clean up in a `finally` block or via a servlet filter.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What happens when a thread pool is saturated and how do saturation policies work?">
+    A `ThreadPoolExecutor` has three capacity parameters:
+
+    - `corePoolSize` — threads kept alive even when idle.
+    - `maxPoolSize` — maximum number of threads allowed.
+    - `workQueueSize` — number of tasks that can wait when all core threads are busy.
+
+    **Saturation** is reached when all `maxPoolSize` threads are active and the work queue is also full. Any new task triggers the **rejection handler** (`RejectedExecutionHandler`).
+
+    **Built-in saturation policies:**
+
+    | Policy | Behaviour |
+    |---|---|
+    | `AbortPolicy` (default) | Throws `RejectedExecutionException` |
+    | `DiscardPolicy` | Silently drops the new task |
+    | `DiscardOldestPolicy` | Removes the oldest queued task; enqueues the new one |
+    | `CallerRunsPolicy` | The submitting thread executes the task itself (slows the caller, acts as back-pressure) |
+
+    You can also implement a custom policy:
+
+    ```java
+    class LoggingPolicy implements RejectedExecutionHandler {
+        @Override
+        public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+            log.warn("Task rejected: {}", r);
+            // optionally re-queue, persist, or alert
+        }
+    }
+
+    ThreadPoolExecutor pool = new ThreadPoolExecutor(
+        4, 8, 60L, TimeUnit.SECONDS,
+        new LinkedBlockingQueue<>(100),
+        new LoggingPolicy()
+    );
+    ```
+
+    `CallerRunsPolicy` is a common choice in web servers because it naturally throttles the request rate: the HTTP thread cannot accept the next request until it finishes executing the rejected task.
+  </Accordion>
+
+  <Accordion title="How do coroutines compare to threads?">
+    Coroutines are lightweight concurrency primitives that run *inside* threads rather than alongside them. The comparison matters when you need to handle thousands of concurrent tasks.
+
+    | Dimension | Thread | Coroutine |
+    |---|---|---|
+    | Memory | ~1 MB stack per thread (JVM default) | A few KB per coroutine |
+    | Context switch | OS-level; saves CPU registers, may flush TLB | User-space; saves only execution point and locals |
+    | Creation cost | OS system call; kernel resources allocated | Object allocation; no kernel involvement |
+    | Blocking on I/O | Thread is fully blocked; cannot do other work | Coroutine suspends; underlying thread is freed |
+
+    **Thread example** — 1,000 threads blocking:
+
+    ```kotlin
+    for (i in 1..1000) {
+        Thread {
+            Thread.sleep(1000) // blocks the thread
+            println("Task $i completed")
+        }.start()
+    }
+    // Allocates ~1 GB of stack memory
+    ```
+
+    **Coroutine example** — 1,000 coroutines on a small thread pool:
+
+    ```kotlin
+    runBlocking {
+        for (i in 1..1000) {
+            launch {
+                delay(1000) // suspends coroutine, releases thread
+                println("Task $i completed")
+            }
+        }
+    }
+    // Uses a few MB; threads are shared across all coroutines
+    ```
+
+    Coroutines are especially powerful for I/O-heavy workloads where threads would otherwise spend most of their time blocked. In the JVM ecosystem, Kotlin coroutines and Project Loom's Virtual Threads both offer coroutine-like efficiency.
+  </Accordion>
+
+</AccordionGroup>

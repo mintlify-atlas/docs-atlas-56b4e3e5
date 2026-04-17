@@ -1,0 +1,308 @@
+---
+title: "Java Collections & Data Structures: Interview Q&A"
+description: "Interview questions on Java collections, algorithmic complexity, hash collisions, linked lists, trees, tries, functional programming, and the JCF internals."
+---
+
+Data structures and collections questions appear in virtually every backend interview, and Java's standard library provides rich material to explore. This page covers the most common topics from the Maeil Mail archive: from the first-class collection pattern and functional programming in Java to the internals of `ArrayList` resizing and the mechanics of binary trees and tries.
+
+<AccordionGroup>
+
+  <Accordion title="What is a first-class collection?">
+    A **first-class collection** is a design pattern in which a single collection field is wrapped inside its own dedicated class. The wrapper class takes sole responsibility for all business logic that relates to that collection — validation, filtering, aggregation — and controls which operations are exposed to the outside world.
+
+    ```java
+    public class Orders {
+        private final List<Order> orders;
+
+        public Orders(List<Order> orders) {
+            validate(orders); // centralised validation
+            this.orders = new ArrayList<>(orders);
+        }
+
+        public void add(Order order) {
+            if (order == null) throw new IllegalArgumentException("Order cannot be null");
+            orders.add(order);
+        }
+
+        public List<Order> getAll() {
+            return Collections.unmodifiableList(orders); // read-only view
+        }
+
+        public double getTotalAmount() {
+            return orders.stream()
+                         .mapToDouble(Order::getAmount)
+                         .sum();
+        }
+    }
+    ```
+
+    **Why use it?**
+
+    - Business logic that belongs to the collection is co-located with it, not scattered across service classes.
+    - The class name (`Orders`) carries domain meaning that `List<Order>` does not.
+    - Unnecessary collection API methods are hidden from callers.
+    - Returning an unmodifiable view prevents accidental external mutation.
+  </Accordion>
+
+  <Accordion title="What is a stack data structure and how should you implement one in Java?">
+    A **stack** is a linear data structure that follows **LIFO** (Last In, First Out) ordering. Elements are pushed onto and popped from the same end (the top). Attempting to pop from an empty stack is a **stack underflow**; exceeding capacity is a **stack overflow**.
+
+    Common real-world uses: call stacks, browser back navigation, undo/redo, bracket validation in parsers.
+
+    **Prefer `Deque` over `Stack` in Java.** The legacy `Stack` class extends `Vector`, which means it inherits index-based access methods (`get(int)`, `insertElementAt`, etc.) that violate LIFO semantics — a developer can accidentally access any element, not just the top. `Vector` also synchronizes every method, which is wasteful in single-threaded code.
+
+    ```java
+    // Recommended: ArrayDeque as a stack
+    Deque<String> stack = new ArrayDeque<>();
+    stack.push("a");
+    stack.push("b");
+    String top = stack.pop(); // "b"
+
+    // For thread safety, use ConcurrentLinkedDeque or wrap explicitly
+    ```
+
+    `Deque` implementations enforce LIFO when you use only `push`/`pop`/`peek`, and you can choose between the unsynchronized `ArrayDeque` and the thread-safe `LinkedBlockingDeque` depending on your needs.
+  </Accordion>
+
+  <Accordion title="What is a hash collision and how is it handled?">
+    A **hash collision** occurs when two different keys produce the same result from the hash function, causing them to map to the same bucket. Because hash functions reduce an unbounded key space to a finite number of buckets, collisions are inevitable.
+
+    **Two main strategies to resolve collisions:**
+
+    **Separate chaining** — each bucket holds a linked list (or, in Java's `HashMap` from Java 8, a red-black tree when the chain exceeds 8 entries). Multiple entries coexist in the same bucket; lookup traverses the chain.
+
+    **Open addressing** — when a bucket is occupied, the algorithm probes for another empty bucket. Three probing strategies:
+
+    | Strategy | How it probes | Problem |
+    |---|---|---|
+    | Linear probing | Fixed step size | Primary clustering (nearby buckets fill up) |
+    | Quadratic probing | Squared step size | Secondary clustering (same hash → same probe sequence) |
+    | Double hashing | Secondary hash function determines step | Lowest collision risk; highest computation cost |
+
+    Java's `HashMap` uses separate chaining with a load factor of 0.75 and an initial capacity of 16. When the number of entries exceeds `capacity × load factor` (i.e., 12 by default), the internal array is doubled and all entries are rehashed.
+
+    <Note>
+      Java's `HashMap` converts a bucket's linked list to a red-black tree when a single bucket accumulates more than 8 entries, keeping worst-case lookup at O(log n) instead of O(n).
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is functional programming and what are pure functions?">
+    **Functional programming (FP)** is a programming paradigm that minimises mutable state and side effects. Rather than encapsulating moving parts (as OOP does), FP minimises them. The two paradigms are complementary — Java supports both.
+
+    A **side effect** is anything a function does beyond returning a value: modifying a variable, writing to I/O, mutating shared state. Side effects make code hard to reason about because the result of calling a function depends on hidden context.
+
+    A **pure function** always returns the same output for the same input and produces no side effects. Pure functions compose cleanly:
+
+    ```java
+    // Impure: hard-coded range, no parameters
+    int sum() {
+        int s = 0;
+        for (int i = 1; i <= 100; i++) s += i;
+        return s;
+    }
+
+    // Pure: accepts a binary operator and a range — composable
+    private int loop(BiFunction<Integer, Integer, Integer> fn,
+                     int accumulator,
+                     Queue<Integer> queue) {
+        if (queue.isEmpty()) return accumulator;
+        return loop(fn, fn.apply(accumulator, queue.poll()), queue);
+    }
+
+    // Reuse loop for both sum and factorial
+    private int sum()            { return loop((a, b) -> a + b, 0, range(1, 100)); }
+    private int factorial(int n) { return loop((a, b) -> a * b, 1, range(1, n));   }
+    ```
+
+    **Function composition** — when function A's output type matches function B's input type, they can be chained: `B(A(x))`. Composing pure functions is straightforward because neither has hidden dependencies.
+  </Accordion>
+
+  <Accordion title="What is a linked list and how does it compare to an array?">
+    A **linked list** is a linear data structure where each node stores a value and a pointer to the next node. The first node is the **HEAD**; the last is the **TAIL**.
+
+    | Operation | Array | Linked list |
+    |---|---|---|
+    | Random access | O(1) | O(n) — must traverse from HEAD |
+    | Insert / delete at known position | O(n) — shifting required | O(1) — pointer update only |
+    | Memory layout | Contiguous | Scattered (heap-allocated nodes) |
+
+    Arrays occupy a contiguous block of memory, enabling O(1) index access and better cache locality. Linked lists allocate nodes anywhere in memory, which avoids the need to copy elements on insert or delete.
+
+    **Singly linked list operations:**
+
+    ```java
+    class SinglyLinkedList {
+        public Node head;
+        public Node tail;
+
+        public Node insert(int value) {
+            Node newNode = new Node(null, value);
+            if (head == null) head = newNode;
+            else tail.next = newNode;
+            tail = newNode;
+            return newNode;
+        }
+
+        public Node find(int value) {
+            Node current = head;
+            while (current.value != value) current = current.next;
+            return current;
+        }
+
+        public void appendNext(Node prev, int value) {
+            prev.next = new Node(prev.next, value);
+        }
+
+        public void deleteNext(Node prev) {
+            if (prev.next != null) prev.next = prev.next.next;
+        }
+    }
+    ```
+
+    Finding a node is O(n) in the worst case; insertion and deletion themselves are O(1) once the target position is known. Variants include doubly linked lists (bidirectional pointers) and circular linked lists.
+  </Accordion>
+
+  <Accordion title="What is time complexity vs space complexity?">
+    Both are measures of algorithmic efficiency, but they measure different resources.
+
+    **Time complexity** counts the number of operations an algorithm performs relative to its input size, expressed with Big-O notation. It avoids hardware-dependent measurements.
+
+    **Space complexity** measures how much additional memory the algorithm consumes as input grows.
+
+    **Big-O rules:**
+
+    ```java
+    // O(n) — one loop over n elements
+    for (int i = 0; i < n; i++) { ... }
+
+    // Still O(n) — constants and coefficients are dropped
+    for (int i = 0; i < n * 5; i++) { ... }
+
+    // O(n + m) — independent loops
+    for (int i = 0; i < n; i++) { ... }
+    for (int i = 0; i < m; i++) { ... }
+
+    // O(n²) — nested loops
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) { ... }
+    }
+
+    // O(n²) — lower-order terms are dropped
+    // (one O(n) loop + one O(n²) loop = O(n²))
+    ```
+
+    When choosing between algorithms, consider both dimensions: an O(n log n) sort might be preferable to an O(n²) sort for large inputs even if the latter uses less memory.
+  </Accordion>
+
+  <Accordion title="What is a trie and when would you use one?">
+    A **trie** (prefix tree) is a tree-shaped data structure optimised for storing and searching strings by their prefixes. Each edge represents a character; each node's value is the accumulated prefix from the root to that node.
+
+    **Strengths**: prefix-based lookups are O(k) where k is the length of the query string — independent of how many strings are stored.
+
+    **Weakness**: each node stores a map of child references, so memory usage is higher than a plain list.
+
+    **Typical use cases**: autocomplete, spell checking, dictionary lookup.
+
+    ```java
+    class Trie {
+        private final Node root = new Node("");
+
+        public void insert(String str) {
+            Node current = root;
+            for (String ch : str.split("")) {
+                current.children.putIfAbsent(ch, new Node(current.value + ch));
+                current = current.children.get(ch);
+            }
+        }
+
+        public boolean has(String str) {
+            Node current = root;
+            for (String ch : str.split("")) {
+                if (!current.children.containsKey(ch)) return false;
+                current = current.children.get(ch);
+            }
+            return true;
+        }
+    }
+
+    // Usage
+    Trie trie = new Trie();
+    trie.insert("maeilmail");
+    trie.has("ma");        // true
+    trie.has("maeil");     // true
+    trie.has("maeilmail"); // true
+    trie.has("mail");      // false
+    ```
+  </Accordion>
+
+  <Accordion title="What is the initial capacity of JCF collections and why does it matter?">
+    `ArrayList` defaults to a capacity of **10**. When that capacity is exhausted, it grows to `oldCapacity + (oldCapacity >> 1)` — approximately 1.5×. For 5,000,000 insertions, this results in many resize operations and a final internal array of 6,153,400 slots (about 70 MB).
+
+    Specifying the expected size upfront eliminates all resizing:
+
+    ```java
+    private static final int MAX = 5_000_000;
+
+    // Default: triggers multiple resizes, ~70 MB
+    List<String> list1 = new ArrayList<>();
+
+    // Preallocated: no resizing, ~20 MB
+    List<String> list2 = new ArrayList<>(MAX);
+    ```
+
+    **HashMap load factor and threshold**:
+
+    `HashMap` has a default initial capacity of **16** and a load factor of **0.75**. The threshold is `capacity × loadFactor = 12`. When the 13th entry is inserted, the internal array doubles to 32 and all entries are rehashed. Providing an initial capacity of `expectedSize / 0.75 + 1` avoids rehashing entirely.
+
+    <Tip>
+      Whenever you know the approximate number of elements a collection will hold, pass it to the constructor. The savings in memory and CPU become significant at high volumes.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is a binary tree and what traversal methods does it support?">
+    A **binary tree** is a tree data structure in which each node has at most two children (left and right). It is the foundation for many other structures.
+
+    **Types of binary trees:**
+
+    ```
+    Perfect binary tree (all levels full):
+            1
+          /   \
+        2       3
+       / \     / \
+      4   5   6   7
+
+    Complete binary tree (all levels full except the last, filled left to right):
+            1
+          /   \
+        2       3
+       / \     /
+      4   5   6
+
+    Skewed binary tree (all nodes on one side):
+        1
+         \
+          2
+           \
+            3
+    ```
+
+    **Key properties:**
+
+    - A perfect/complete tree of N nodes has height O(log N).
+    - A skewed tree of N nodes has height N - 1 (degenerates to a linked list).
+    - A perfect tree of height h has 2^(h+1) - 1 nodes.
+
+    **Four traversal orders:**
+
+    | Order | Visit sequence | Common use |
+    |---|---|---|
+    | In-order (LNR) | Left → Node → Right | BST produces sorted output |
+    | Pre-order (NLR) | Node → Left → Right | Tree serialisation |
+    | Post-order (LRN) | Left → Right → Node | Deleting a tree |
+    | Level-order (BFS) | Level by level | Shortest-path problems |
+
+    **Derived structures**: heaps (priority queues), binary search trees, AVL trees, and red-black trees are all specialisations of the binary tree.
+  </Accordion>
+
+</AccordionGroup>

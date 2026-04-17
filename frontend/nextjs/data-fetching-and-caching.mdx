@@ -1,0 +1,316 @@
+---
+title: "Data Fetching, Caching, and State Management in Next.js"
+description: "Interview Q&A on TanStack Query, staleTime vs gcTime, optimistic updates, Next.js caching layers, next/image optimization, and the BFF pattern."
+---
+
+Efficient data fetching and caching are central to building performant web applications. Modern Next.js projects combine server-side caching mechanisms with client-side libraries like TanStack Query, and often introduce architectural patterns like BFF to manage the complexity of multi-service backends. This page covers the most commonly tested concepts in frontend interviews on these topics.
+
+<AccordionGroup>
+  <Accordion title="What is TanStack Query and why do teams adopt it?">
+    **TanStack Query** (formerly React Query) is a library purpose-built for managing **server state** — data that lives on a server, cannot be mutated directly by the client, and must be retrieved and kept in sync through asynchronous network requests.
+
+    Without a dedicated tool, managing server state in React typically involves a combination of `useEffect`, `useState`, manual loading/error flags, and ad-hoc caching logic. This grows difficult to maintain as the number of data sources increases.
+
+    **TanStack Query addresses three core problems:**
+
+    **1. Caching** — fetched data is stored in an in-memory cache keyed by a query key. Repeated requests for the same data are served from the cache without additional network calls, reducing latency and bandwidth consumption.
+
+    **2. Declarative async management** — fetching, refetching, and invalidating data are described declaratively. There is no need to imperatively wire up `useEffect` chains for common patterns.
+
+    **3. Built-in loading and error states** — `useQuery` and `useMutation` expose `isLoading`, `isError`, `isSuccess`, and `data` without any boilerplate:
+
+    ```tsx
+    import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+
+    function UserProfile({ userId }: { userId: string }) {
+      const queryClient = useQueryClient();
+
+      const { data: user, isLoading, isError } = useQuery({
+        queryKey: ['user', userId],
+        queryFn: () => fetchUser(userId),
+        staleTime: 5 * 60 * 1000, // consider fresh for 5 minutes
+      });
+
+      const updateMutation = useMutation({
+        mutationFn: updateUser,
+        onSuccess: () => {
+          // Invalidate so the profile is re-fetched with fresh data
+          queryClient.invalidateQueries({ queryKey: ['user', userId] });
+        },
+      });
+
+      if (isLoading) return <Skeleton />;
+      if (isError) return <ErrorMessage />;
+
+      return <div>{user.name}</div>;
+    }
+    ```
+
+    **When TanStack Query is not enough:**
+
+    TanStack Query manages server state only. For UI state (modal open/closed, selected tab, form values) or for complex relationships between client and server state, a separate state manager — Zustand, Jotai, or Redux — is still needed.
+
+    <Note>
+      TanStack Query does not replace a global state manager; it replaces the manual fetch-and-store-in-Redux pattern for server data. The two tools are complementary.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between staleTime and gcTime in TanStack Query?">
+    These two options control different dimensions of TanStack Query's caching behavior. Confusing them leads to either stale data being displayed for too long or unnecessary network requests.
+
+    **`staleTime` — how long is data considered fresh?**
+
+    After a query fetches data, that data is marked **fresh** for the duration of `staleTime`. While the data is fresh, TanStack Query will not make a new network request even if a refetch is triggered (e.g., window refocus, component remount).
+
+    Once `staleTime` expires, the data is marked **stale**. The cached value is still available and displayed immediately, but the next trigger will fire a background refetch to update it.
+
+    - Default: `0` (data is immediately stale — always refetches on trigger)
+
+    **`gcTime` — how long does the cache entry live after it is unused?**
+
+    When all components subscribed to a query key unmount, the cached data is no longer actively used. `gcTime` controls how long TanStack Query keeps this orphaned entry in memory before garbage collecting it.
+
+    If the user navigates back to a page that uses the same query key before `gcTime` expires, the stale cached value is shown immediately while a background refetch runs. After `gcTime` elapses, the cache entry is deleted and the next mount starts with a fresh loading state.
+
+    - Default: `5 minutes`
+
+    **Summary table:**
+
+    | Setting | Controls | Affects network requests? | Default |
+    |---------|----------|--------------------------|---------|
+    | `staleTime` | How long fetched data is treated as current | Yes — no refetch during fresh window | `0` |
+    | `gcTime` | How long unused cache entries are kept in memory | No — only determines when to delete from cache | `5 min` |
+
+    **Practical example:**
+
+    ```tsx
+    useQuery({
+      queryKey: ['products'],
+      queryFn: fetchProducts,
+      staleTime: 10 * 60 * 1000,  // Re-use cache for 10 min; no background refetch
+      gcTime: 30 * 60 * 1000,     // Keep in memory for 30 min after last subscriber unmounts
+    });
+    ```
+
+    <Tip>
+      For data that changes infrequently (product catalog, user preferences), set a generous `staleTime` to reduce API calls. For real-time data (stock prices, live scores), keep `staleTime` at `0` so every trigger fetches fresh data.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are optimistic updates and when should you avoid them?">
+    An **optimistic update** is a technique where the UI is updated immediately to reflect an expected outcome, without waiting for the server to confirm the operation. If the server request succeeds, nothing more needs to be done. If it fails, the UI is rolled back to its previous state.
+
+    The classic example is a "like" button: when the user clicks it, the heart icon fills instantly and the count increments — the server request happens in the background.
+
+    **Implementation with TanStack Query:**
+
+    ```tsx
+    const queryClient = useQueryClient();
+
+    const likeMutation = useMutation({
+      mutationFn: (postId: string) => likePost(postId),
+
+      onMutate: async (postId) => {
+        // Cancel any in-flight refetches to avoid overwriting our optimistic update
+        await queryClient.cancelQueries({ queryKey: ['posts', postId] });
+
+        // Snapshot the previous value for rollback
+        const previousPost = queryClient.getQueryData(['posts', postId]);
+
+        // Optimistically update the cache
+        queryClient.setQueryData(['posts', postId], (old: Post) => ({
+          ...old,
+          liked: true,
+          likeCount: old.likeCount + 1,
+        }));
+
+        return { previousPost };
+      },
+
+      onError: (err, postId, context) => {
+        // Roll back to the snapshot on failure
+        queryClient.setQueryData(['posts', postId], context?.previousPost);
+      },
+
+      onSettled: (postId) => {
+        // Always refetch to sync with server truth
+        queryClient.invalidateQueries({ queryKey: ['posts', postId] });
+      },
+    });
+    ```
+
+    **When optimistic updates improve UX:**
+
+    - Social interactions (likes, follows, reactions) — failure is rare and the action is low-stakes.
+    - Reordering items in a list — the visual change should feel immediate.
+    - Any mutation where the success rate is very high and a momentary incorrect state is acceptable.
+
+    **When optimistic updates hurt UX:**
+
+    - **Financial transactions** — a payment that briefly shows as successful before rolling back is alarming and erodes user trust.
+    - **Unreliable network conditions** — if failure rates are high, the user experiences frequent rollbacks, which is more disorienting than waiting for confirmation.
+    - **Writes with complex server-side validation** — if the server frequently rejects the mutation, the rollback frequency undermines the perceived benefit.
+
+    <Warning>
+      Always implement the rollback (`onError`) path before shipping optimistic updates. Without it, a server failure leaves the UI in an incorrect state with no recovery mechanism.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How does Next.js caching work? Explain the four layers.">
+    Next.js (App Router) operates a four-layer caching system, each targeting a different scope. Understanding all four is essential to diagnosing unexpected stale data or unnecessary re-renders.
+
+    **1. Request Memoization (per render)**
+
+    Within a single server render, if multiple components fetch the same URL, Next.js deduplicates the requests. Only one network call is made; subsequent calls within the same render receive the cached response.
+
+    This is implemented via React's built-in `fetch` deduplication and applies only within a single request lifecycle — it does not persist across requests.
+
+    **2. Data Cache (persistent, server-side)**
+
+    The result of `fetch()` calls can be stored persistently on the Next.js server. Unlike the per-render memoization, data cache survives across multiple requests.
+
+    ```tsx
+    // Cache indefinitely (or until manually revalidated)
+    const data = await fetch('https://api.example.com/products', {
+      cache: 'force-cache',
+    });
+
+    // Cache and revalidate every 60 seconds (ISR-style)
+    const data = await fetch('https://api.example.com/products', {
+      next: { revalidate: 60 },
+    });
+
+    // Never cache — always fetch fresh data
+    const data = await fetch('https://api.example.com/user', {
+      cache: 'no-store',
+    });
+    ```
+
+    **3. Full Route Cache (persistent, server-side)**
+
+    When a route is fully static — no dynamic functions like `cookies()` or `headers()`, and all fetches use `force-cache` or `revalidate` — Next.js pre-renders the complete page and stores the HTML + RSC Payload. Subsequent requests are served from this cache without running any server-side code.
+
+    Setting `revalidate` on the route or individual fetches enables **ISR (Incremental Static Regeneration)**, where the cached page is regenerated in the background at a defined interval.
+
+    **4. Client Router Cache (browser-side)**
+
+    When the user navigates between routes in the browser, Next.js caches the RSC Payload (React Server Component output) for visited routes. Layout segments shared across routes are cached and reused on navigation, avoiding redundant server requests for stable UI like headers and navigation bars.
+
+    **Layer summary:**
+
+    | Layer | Scope | Location | Invalidation |
+    |-------|-------|----------|--------------|
+    | Request memoization | Single render | Server memory | Automatic (per request) |
+    | Data cache | Persistent | Next.js server | `revalidate`, `no-store`, manual via `revalidatePath`/`revalidateTag` |
+    | Full route cache | Persistent | Next.js server | `revalidate`, dynamic functions |
+    | Client router cache | Session | Browser memory | Navigation, `router.refresh()` |
+
+    <Note>
+      The Next.js caching model changed significantly between Next.js 13 and 15. In Next.js 15, `fetch` requests are **no longer cached by default** — you must explicitly opt in with `force-cache` or `revalidate`. Always check the version-specific docs for your project.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Why use next/image instead of a plain img tag?">
+    The `<img>` element gives developers full control but no automatic optimization. The `next/image` component trades some of that flexibility for significant out-of-the-box performance improvements.
+
+    **Three key advantages of `next/image`:**
+
+    **1. Format and size optimization**
+
+    Next.js automatically serves images in the most efficient format the requesting browser supports. If the browser supports WebP, the component serves WebP. If it supports AVIF (even smaller), it serves AVIF. The image is also resized on the fly to match the rendered size, preventing the common mistake of loading a 4000px image to display it at 400px.
+
+    **2. Lazy loading by default**
+
+    `next/image` uses the browser's native `loading="lazy"` by default, meaning images below the fold are not fetched until the user scrolls near them. This reduces the amount of data downloaded on initial page load without any extra configuration.
+
+    **3. Placeholder support to prevent layout shift**
+
+    The `placeholder` prop lets you show a blurred preview or a solid color block while the full image loads. This prevents the content jump (CLS) that occurs when an unsized `<img>` pops into a layout.
+
+    ```tsx
+    import Image from 'next/image';
+
+    <Image
+      src="/hero.jpg"
+      alt="Product hero image showing the main feature"
+      width={1200}
+      height={600}
+      priority        // Skip lazy loading for above-the-fold images
+      placeholder="blur"
+      blurDataURL="data:image/jpeg;base64,..."
+    />
+    ```
+
+    **When to still use a plain `<img>`:**
+
+    - Images with fully dynamic, user-supplied URLs from untrusted domains (each domain must be allowlisted in `next.config.js`).
+    - Purely decorative images where the optimization overhead is not worth the configuration.
+    - Environments without a server to run Next.js image optimization (pure static export with `output: 'export'`).
+
+    ```js
+    // next.config.js — required for external image domains
+    module.exports = {
+      images: {
+        remotePatterns: [
+          {
+            protocol: 'https',
+            hostname: 'cdn.example.com',
+          },
+        ],
+      },
+    };
+    ```
+
+    <Tip>
+      Always set the `priority` prop on the image most likely to be your LCP (Largest Contentful Paint) element — typically the hero image or a product photo above the fold. This disables lazy loading for that image and adds a `<link rel="preload">` to the document head.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the Backend for Frontend (BFF) pattern and why is it used?">
+    **BFF (Backend for Frontend)** is an architectural pattern where a dedicated server layer sits between the frontend and the underlying backend services. Rather than having the browser call microservices or third-party APIs directly, it calls the BFF, which aggregates, transforms, and proxies data on the client's behalf.
+
+    **Why BFF emerged — the microservices problem:**
+
+    In a monolithic backend, a single API endpoint could return exactly the data the UI needed. When teams adopt MSA (Microservice Architecture), the frontend suddenly has to orchestrate calls to multiple services (user service, inventory service, recommendation service) and assemble the results itself. This increases the number of network round-trips, adds complexity to the client, and couples the UI tightly to the internal service topology.
+
+    A BFF solves this by being the single API the client calls:
+
+    ```
+    Browser  →  BFF  →  User Service
+                     →  Inventory Service
+                     →  Recommendation Service
+    ```
+
+    The BFF joins the responses and returns a single, UI-optimized payload.
+
+    **Other problems BFF addresses:**
+
+    - **Platform-specific responses** — a mobile app needs a leaner payload than a web dashboard. A BFF for each platform (web BFF, mobile BFF) can tailor the response shape and field set accordingly.
+    - **API key and credential security** — the BFF holds secrets server-side. The browser never receives API keys for third-party services.
+    - **CORS management** — browser-side cross-origin restrictions are sidestepped because the BFF makes server-to-server calls.
+    - **Backend insulation** — when a backend service changes its API, only the BFF needs to be updated. The frontend remains stable.
+
+    **Next.js as a BFF:**
+
+    Next.js Route Handlers (`app/api/`) and Server Actions make it straightforward to use a Next.js application as its own BFF layer without a separate server:
+
+    ```ts
+    // app/api/dashboard/route.ts — aggregates two upstream services
+    export async function GET(request: Request) {
+      const [user, orders] = await Promise.all([
+        fetch('https://user-service/me', { headers: authHeaders(request) }),
+        fetch('https://order-service/recent', { headers: authHeaders(request) }),
+      ]);
+
+      return Response.json({
+        user: await user.json(),
+        recentOrders: await orders.json(),
+      });
+    }
+    ```
+
+    <Note>
+      BFF adds an additional network hop and an additional service to operate and monitor. For simple applications with a single backend, the overhead may not be justified. Evaluate the trade-off against your specific complexity and team structure.
+    </Note>
+  </Accordion>
+</AccordionGroup>

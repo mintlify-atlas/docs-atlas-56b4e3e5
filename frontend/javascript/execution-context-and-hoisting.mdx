@@ -1,0 +1,179 @@
+---
+title: "Execution Context and Hoisting Interview Questions"
+description: "Understand JavaScript execution contexts, the call stack, hoisting mechanics, TDZ, and the compile vs. execution phases with Maeil Mail interview Q&A."
+---
+
+Before a single line of your JavaScript runs, the engine has already scanned the code, allocated memory for declarations, and set up the environment in which each piece of code will execute. That environment is the **execution context**, and the side-effect of its creation — where declarations appear to "move" to the top — is **hoisting**. Both topics appear in nearly every JavaScript interview and underpin a deep understanding of how the language works.
+
+<AccordionGroup>
+  <Accordion title="What is an execution context?">
+    An **execution context** is the environment that the JavaScript engine creates to track the state of code as it runs. It defines which variables and functions are accessible, what `this` refers to, and how variable lookups are resolved.
+
+    There are two main types:
+
+    **Global execution context** — created when the JavaScript engine first starts. It exists for the entire lifetime of the program and is where globally declared variables and functions live. Because JavaScript is single-threaded, only one global execution context exists at a time.
+
+    **Function execution context** — created every time a function is called. Each function gets its own context containing its local variables, parameters, and inner function declarations. When the function returns, its context is destroyed.
+
+    Execution contexts are managed on a **call stack**: the global context sits at the bottom, and each function call pushes a new context onto the stack. When a function returns, its context is popped off.
+
+    ```javascript
+    function greet(name) {
+      const message = `Hello, ${name}!`; // lives in greet's execution context
+      return message;
+    }
+
+    const result = greet('Alice'); // a new execution context is created and then destroyed
+    ```
+  </Accordion>
+
+  <Accordion title="What are the components of an execution context?">
+    Every execution context is made up of three components:
+
+    **1. Variable Object (VO) / Activation Object**
+
+    Stores the variables and function declarations belonging to the context. In the global context the Variable Object is the global object (e.g. `window` in browsers). In a function context an **Activation Object** is created to hold the function's local variables and parameters.
+
+    **2. Scope Chain**
+
+    A linked list of all the Variable Objects from the current context up to the global context. When the engine looks up a variable it searches the scope chain from the innermost context outward until the variable is found or the global scope is exhausted.
+
+    **3. `this` binding**
+
+    The value of `this` depends on how the context was created:
+    - In the global context, `this` refers to the global object (`window` / `global`).
+    - In a function context, `this` depends on how the function was called (see the `this` binding Q&A in the Prototypes & OOP section).
+
+    ```javascript
+    function showContext() {
+      // Inside here: VO contains `showContext`'s locals
+      // Scope chain: showContext VO → global VO
+      // this: global object (in non-strict mode)
+      console.log(this);
+    }
+    showContext();
+    ```
+  </Accordion>
+
+  <Accordion title="What is hoisting?">
+    **Hoisting** is the observable behaviour where variable and function declarations appear to be "moved" to the top of their containing scope before any code executes.
+
+    This is not a literal move in source code — it is a result of JavaScript's two-phase execution model (see the next question). The key rules are:
+
+    **`var` declarations** are hoisted and immediately initialised to `undefined`. Reading the variable before its assignment returns `undefined`, not an error.
+
+    ```javascript
+    console.log(myVar); // undefined (not ReferenceError)
+    var myVar = 10;
+    console.log(myVar); // 10
+    ```
+
+    **Function declarations** are hoisted in full — both the declaration and the function body. You can call the function before its declaration in source code.
+
+    ```javascript
+    console.log(myFunction()); // 'Hello World'
+
+    function myFunction() {
+      return 'Hello World';
+    }
+    ```
+
+    **`let` and `const`** are also hoisted (their names are reserved in the scope), but they are **not initialised**. Accessing them before their declaration line throws a `ReferenceError` because they sit in the **Temporal Dead Zone (TDZ)**.
+
+    ```javascript
+    console.log(myLet); // ReferenceError: Cannot access 'myLet' before initialization
+    let myLet = 10;
+    ```
+
+    **Function expressions** behave like variables — only the variable binding is hoisted, not the function body. Calling a function expression before the assignment line will error.
+
+    ```javascript
+    console.log(multiply(2, 3)); // TypeError or ReferenceError — not yet assigned
+
+    const multiply = function (a, b) {
+      return a * b;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Why does hoisting happen? What are the compile and execution phases?">
+    Hoisting is possible because the JavaScript engine processes code in **two phases** before running it.
+
+    **Phase 1 — Compilation (parsing)**
+
+    The engine scans the entire script and allocates memory for all declarations:
+    - `var` variables are registered and initialised to `undefined`.
+    - Function declarations are stored in memory in their entirety.
+    - `let` and `const` bindings are registered but left in an uninitialised state (the TDZ).
+
+    Because declarations are in memory before execution begins, code can reference them earlier in the source file.
+
+    ```javascript
+    // At compilation time, 'myVar' is registered and set to undefined.
+    console.log(myVar); // undefined — already in memory
+    var myVar = 5;
+    console.log(myVar); // 5 — assigned during execution
+    ```
+
+    **Phase 2 — Execution**
+
+    The engine runs the code line by line. Variable assignments, function calls, and all other statements are executed in order. `let`/`const` variables transition out of the TDZ and become accessible only when execution reaches their declaration line.
+
+    ```javascript
+    // Phase 1: 'count' is registered (TDZ); 'double' function is fully stored.
+    // Phase 2: execution proceeds top-to-bottom.
+
+    console.log(double(4)); // 8 — function declaration was fully hoisted
+    // console.log(count);  // would throw ReferenceError (TDZ)
+
+    let count = 10;         // TDZ ends here
+    console.log(count);     // 10
+
+    function double(n) {
+      return n * 2;
+    }
+    ```
+
+    <Note>
+      The **Temporal Dead Zone (TDZ)** is the region between the start of a block scope and the point where a `let` or `const` variable is initialised. Any access inside the TDZ throws a `ReferenceError`. The TDZ was introduced to catch bugs where code depended on reading an uninitialised variable.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between function declarations and function expressions?">
+    The key difference is **how hoisting treats them**.
+
+    | | Function Declaration | Function Expression |
+    |---|---|---|
+    | Syntax | `function name() {}` | `const name = function() {}` |
+    | Hoisted? | Yes — fully (name + body) | Partially — only the variable binding |
+    | Callable before definition? | Yes | No |
+
+    ```javascript
+    // ✅ Function declaration — callable before the definition line
+    console.log(add(2, 3)); // 5
+
+    function add(a, b) {
+      return a + b;
+    }
+    ```
+
+    ```javascript
+    // ❌ Function expression — not callable before the assignment
+    console.log(multiply(2, 3)); // ReferenceError (const) or TypeError (var)
+
+    const multiply = function (a, b) {
+      return a * b;
+    };
+    ```
+
+    Use function declarations when you want the function available throughout the scope regardless of declaration order. Use function expressions (or arrow functions) when you want to control exactly when the function becomes available, or when assigning a function to a property or passing it as a callback.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Relying on `var` hoisting to use a variable before its assignment makes code harder to reason about. Prefer `let` and `const` so that any out-of-order access is caught immediately as a `ReferenceError`.
+</Warning>
+
+<Tip>
+  A quick mental model: during the compilation phase, think of JavaScript scanning for `var` and `function` keywords and "pinning" them at the top of their scope. Then, during execution, only the assignments and calls happen in order.
+</Tip>

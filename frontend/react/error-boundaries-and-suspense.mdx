@@ -1,0 +1,209 @@
+---
+title: "Error boundaries, Suspense, and async error handling"
+description: "How React Error Boundaries catch render errors, why async errors escape them, and when to use Suspense vs useEffect-based loading state."
+---
+
+Error handling and loading state management are two aspects of React that often get less attention than state and rendering, yet they have an outsized impact on application reliability and user experience. Error Boundary components give you a declarative way to contain rendering failures without crashing the whole page. Suspense gives you a similarly declarative approach to loading states. Understanding the boundaries of each — including what Error Boundaries genuinely cannot catch — is essential for building resilient UIs.
+
+<AccordionGroup>
+  <Accordion title="What is an Error Boundary and why is it useful?">
+    An **Error Boundary** is a React component that catches JavaScript errors thrown during rendering, in lifecycle methods, or in constructors of any component in its subtree. When an error is caught, the Error Boundary renders a fallback UI instead of the broken subtree — preventing a localized failure from crashing the entire application.
+
+    Without Error Boundaries, an uncaught render-time error causes React to unmount the full component tree, leaving the user with a blank page. With an Error Boundary placed strategically in the tree, only the affected region shows a fallback; the rest of the application continues working normally.
+
+    Error Boundaries must be **class components** — the two lifecycle methods they rely on (`getDerivedStateFromError` and `componentDidCatch`) are not available as hooks.
+
+    ```jsx
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+      }
+
+      static getDerivedStateFromError(error) {
+        // Update state to trigger fallback UI on next render
+        return { hasError: true };
+      }
+
+      componentDidCatch(error, info) {
+        // Log the error to an error reporting service
+        logErrorToService(error, info.componentStack);
+      }
+
+      render() {
+        if (this.state.hasError) {
+          return this.props.fallback ?? <p>Something went wrong.</p>;
+        }
+        return this.props.children;
+      }
+    }
+
+    // Usage
+    function App() {
+      return (
+        <ErrorBoundary fallback={<ErrorPage />}>
+          <Dashboard />
+        </ErrorBoundary>
+      );
+    }
+    ```
+
+    **Why declarative error handling matters**
+
+    The alternative is imperative: every component wraps its render logic in try/catch, every error state gets threaded through props, and the logic for what to show when things go wrong is scattered throughout the tree. An Error Boundary consolidates that concern into a single component. You declare "this subtree should show this fallback when anything inside it breaks" — and React handles the rest.
+
+    This also cleanly separates error handling logic from business logic, improving readability and testability.
+
+    <Tip>
+      Libraries like `react-error-boundary` provide a ready-to-use `ErrorBoundary` component and a `useErrorBoundary` hook so you don't have to write the class component yourself.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Why can't Error Boundaries catch asynchronous errors?">
+    Error Boundaries catch errors that occur **synchronously during the rendering phase** — specifically, errors thrown inside component `render` methods, lifecycle methods, or the constructors of class components.
+
+    They cannot catch errors from **asynchronous code** — `setTimeout`, `Promise` rejections, `async/await`, or native event handlers.
+
+    The reason is architectural. React's rendering pipeline runs as a synchronous, contiguous call stack. When React calls a component function and that function throws, the error propagates up the call stack synchronously, where React's error boundary mechanism can intercept it.
+
+    Asynchronous callbacks execute in a separate microtask or macrotask — outside the render call stack entirely. By the time an async error occurs, React's render call stack has already completed and unwound. There is no boundary mechanism in place to intercept it.
+
+    ```jsx
+    class MyBoundary extends React.Component {
+      // This WILL be triggered:
+      // - errors thrown during render
+      // - errors in useEffect? No — but errors in componentDidMount/Update yes
+
+      // This will NOT be triggered:
+      // - rejected Promise inside useEffect
+      // - setTimeout callback that throws
+      // - async event handler
+
+      static getDerivedStateFromError(error) {
+        return { hasError: true };
+      }
+
+      render() {
+        if (this.state.hasError) return <p>Error</p>;
+        return this.props.children;
+      }
+    }
+
+    function BrokenComponent() {
+      useEffect(() => {
+        // This async error is NOT caught by ErrorBoundary
+        setTimeout(() => {
+          throw new Error('Async error');
+        }, 1000);
+      }, []);
+
+      return <p>Component</p>;
+    }
+    ```
+
+    **Handling async errors in practice**
+
+    The standard approaches are:
+
+    1. **`try/catch` inside async functions** — catch the error and set an error state locally or re-throw it synchronously.
+    2. **Re-throw synchronously via `setState`** — catch the async error and call `setState` with a callback that throws, which causes the next render to throw synchronously where an Error Boundary can catch it.
+
+    ```jsx
+    function DataFetcher() {
+      const [, setState] = useState();
+
+      useEffect(() => {
+        fetchData().catch(error => {
+          // Re-throw synchronously so the Error Boundary can catch it
+          setState(() => { throw error; });
+        });
+      }, []);
+
+      return <p>Loading...</p>;
+    }
+    ```
+
+    <Warning>
+      Unhandled `Promise` rejections in async event handlers or `useEffect` cleanup functions will not be caught by any Error Boundary. Always handle async errors explicitly.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How does Suspense compare to useEffect-based loading state?">
+    Both approaches manage the experience of waiting for asynchronous data, but they differ fundamentally in where the loading logic lives and how readable the result is.
+
+    **Traditional `useEffect` + loading state**
+
+    You manually track loading state with a `useState` variable, fetch inside `useEffect`, and conditionally render the loading UI:
+
+    ```jsx
+    function UserProfile({ userId }) {
+      const [user, setUser] = useState(null);
+      const [isLoading, setIsLoading] = useState(true);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        setIsLoading(true);
+        fetchUser(userId)
+          .then(data => {
+            setUser(data);
+            setIsLoading(false);
+          })
+          .catch(err => {
+            setError(err);
+            setIsLoading(false);
+          });
+      }, [userId]);
+
+      if (isLoading) return <Spinner />;
+      if (error) return <ErrorMessage error={error} />;
+      return <div>{user.name}</div>;
+    }
+    ```
+
+    This works, but the loading and error logic is entangled with the component's rendering logic. When multiple components fetch data independently, each carries the same boilerplate, and coordinating their loading states becomes complex.
+
+    **`Suspense`**
+
+    Suspense lets you declare the loading fallback at the tree level rather than inside each component. The component itself focuses solely on the happy-path render; the loading state is handled externally:
+
+    ```jsx
+    // The component renders as if the data is already there
+    function UserProfile({ userId }) {
+      const user = use(fetchUser(userId)); // Throws a Promise while pending
+      return <div>{user.name}</div>;
+    }
+
+    // The boundary that handles the loading state
+    function App() {
+      return (
+        <Suspense fallback={<Spinner />}>
+          <UserProfile userId={1} />
+        </Suspense>
+      );
+    }
+    ```
+
+    The loading logic is written once, at the `Suspense` boundary, and applies to everything inside it.
+
+    **Trade-offs of Suspense**
+
+    - When multiple `Suspense` boundaries are nested, each manages its fallback independently. If their data resolves at different times, you may see multiple sequential loading states — which can feel jarring. Careful tree design is required to avoid this.
+    - Suspense requires data-fetching code that integrates with React's `Promise`-based suspension protocol. Direct `fetch` calls don't work without a library (like TanStack Query, SWR, or Relay) or a wrapper that handles the integration.
+
+    <Note>
+      React 18 introduced the `use` hook in experimental builds, and React 19 stabilized it. Libraries like TanStack Query provide stable Suspense support today without requiring the experimental API.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Combine Error Boundaries with Suspense to cover both failure states declaratively. Wrap your `Suspense` component inside an `ErrorBoundary` so that both loading and error states are handled at the same level in the tree:
+
+  ```jsx
+  <ErrorBoundary fallback={<ErrorPage />}>
+    <Suspense fallback={<Spinner />}>
+      <AsyncComponent />
+    </Suspense>
+  </ErrorBoundary>
+  ```
+</Tip>

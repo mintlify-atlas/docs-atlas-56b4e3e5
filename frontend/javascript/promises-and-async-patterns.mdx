@@ -1,0 +1,231 @@
+---
+title: "Promises and Async Patterns Interview Questions"
+description: "Explore JavaScript Promises, their states, resolve vs. fulfilled, async/await, and execution-order puzzles from the Maeil Mail frontend interview archive."
+---
+
+Asynchronous programming is at the heart of modern JavaScript. Promises replaced callback-heavy patterns with a chainable, composable API, and `async/await` made asynchronous code read as naturally as synchronous code. Understanding how Promises work internally — their states, how `resolve` and `reject` interact with the event loop, and how microtask scheduling determines execution order — is a frequent and revealing interview topic.
+
+<AccordionGroup>
+  <Accordion title="What is a Promise, and why was it introduced?">
+    A **Promise** is an object representing the eventual completion or failure of an asynchronous operation. It acts as a placeholder for a value that is not yet available, allowing you to attach handlers that run when the value arrives.
+
+    Before Promises, asynchronous code was written with nested callbacks. As logic grew more complex, callbacks became deeply nested — the infamous **"callback hell"** — making code hard to read, reason about, and debug.
+
+    ```javascript
+    // ❌ Callback hell
+    login(user, password, function (err, session) {
+      if (err) return handleError(err);
+      fetchProfile(session.userId, function (err, profile) {
+        if (err) return handleError(err);
+        loadDashboard(profile, function (err, dashboard) {
+          if (err) return handleError(err);
+          render(dashboard);
+        });
+      });
+    });
+    ```
+
+    ```javascript
+    // ✅ Same flow with Promises
+    login(user, password)
+      .then(session => fetchProfile(session.userId))
+      .then(profile => loadDashboard(profile))
+      .then(dashboard => render(dashboard))
+      .catch(handleError);
+    ```
+
+    Promises flatten the chain, making the sequential flow explicit and error handling centralised.
+  </Accordion>
+
+  <Accordion title="What are the three states of a Promise?">
+    A Promise can be in exactly one of three states, and once it transitions out of `pending` it can never change state again.
+
+    | State | Meaning |
+    |-------|---------|
+    | **Pending** | The async operation has not yet completed. This is the initial state. |
+    | **Fulfilled** | The operation completed successfully. A resolved value is available. |
+    | **Rejected** | The operation failed. A reason (error) is available. |
+
+    ```javascript
+    const promise = new Promise((resolve, reject) => {
+      setTimeout(() => {
+        const success = true;
+        if (success) {
+          resolve('Operation complete'); // → fulfilled
+        } else {
+          reject(new Error('Operation failed')); // → rejected
+        }
+      }, 1000);
+    });
+
+    promise
+      .then(value => console.log(value))   // runs if fulfilled
+      .catch(error => console.error(error)); // runs if rejected
+    ```
+
+    <Note>
+      Once a Promise is settled (fulfilled or rejected) it is **immutable** — no further calls to `resolve` or `reject` will change its state or value.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between resolve() and fulfilled?">
+    These two terms are related but describe different things.
+
+    **`resolve(value)`** is a **function** — it is the first argument passed to the Promise constructor's executor. Calling it signals that the async work is done and provides the resulting value. It is an action.
+
+    **`fulfilled`** is a **state** — it describes the condition the Promise is in after `resolve` has been called. It is a description.
+
+    ```javascript
+    new Promise((resolve, reject) => {
+      // 'resolve' is the function; calling it transitions the Promise to 'fulfilled'
+      resolve('done'); // Promise is now in the 'fulfilled' state
+    });
+    ```
+
+    A useful analogy: `resolve()` is the act of signing a contract; `fulfilled` is the status "contract signed."
+
+    **Can `resolve` fail?** No. `resolve` itself never fails — it unconditionally transitions the Promise to `fulfilled`. If the work fails, `reject` is called instead, and `resolve` is never invoked.
+
+    ```javascript
+    // resolve → fulfilled → .then() handler runs
+    // reject  → rejected  → .catch() handler runs
+    const p = new Promise((resolve, reject) => {
+      resolve('success');
+    });
+
+    p.then(v => console.log('then:', v));   // 'then: success'
+    p.catch(e => console.log('catch:', e)); // never runs
+    ```
+  </Accordion>
+
+  <Accordion title="What are the drawbacks of Promises?">
+    Promises are a significant improvement over callbacks, but they have two notable weaknesses:
+
+    **1. Complex error handling across multiple async flows**
+
+    In a single chain, a `.catch()` at the end handles all errors cleanly. But when Promises are nested or when you need different error handling at different steps, the code can become difficult to manage.
+
+    ```javascript
+    fetchUser()
+      .then(user => {
+        return fetchOrders(user.id) // what if only this step fails?
+          .then(orders => ({ user, orders }));
+      })
+      .then(data => render(data))
+      .catch(err => handleError(err)); // catches everything — hard to differentiate
+    ```
+
+    **2. Chains still resemble callback hell at scale**
+
+    Long sequences of `.then()` calls can become unwieldy and hurt readability — especially when intermediate values need to be threaded through multiple steps.
+
+    ```javascript
+    step1()
+      .then(a => step2(a))
+      .then(b => step3(b))
+      .then(c => step4(c))
+      .then(d => step5(d))
+      .catch(handleError);
+    ```
+
+    Both issues are largely resolved by `async/await`, which lets you write asynchronous code that looks synchronous and handles errors with standard `try/catch` blocks.
+
+    ```javascript
+    async function run() {
+      try {
+        const a = await step1();
+        const b = await step2(a);
+        const c = await step3(b);
+        render(c);
+      } catch (err) {
+        handleError(err);
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is the output of this Promise + setTimeout code? (Execution order puzzle)">
+    This question tests knowledge of how the event loop, microtask queue, and macrotask queue interact.
+
+    ```javascript
+    setTimeout(() => {
+      console.log('1')
+      setTimeout(() => { console.log('2') })
+      Promise.resolve().then(() => console.log('3'))
+      console.log('4')
+    })
+
+    Promise.resolve().then(() => {
+      console.log('5')
+      setTimeout(() => { console.log('6') })
+      Promise.resolve().then(() => console.log('7'))
+      console.log('8')
+    })
+
+    console.log('9')
+    ```
+
+    **Answer: `9 → 5 → 8 → 7 → 1 → 4 → 3 → 6 → 2`**
+
+    The event loop follows this repeating pattern:
+
+    1. Run all synchronous code.
+    2. Drain the entire microtask queue (including any microtasks enqueued by microtasks).
+    3. Pick one macrotask from the macrotask queue.
+    4. Go back to step 2.
+
+    **Step-by-step walkthrough:**
+
+    | Step | What executes | Output |
+    |------|--------------|--------|
+    | Sync code runs | `console.log('9')` | `9` |
+    | Microtask queue drains | `Promise.then` callback: `console.log('5')`, `console.log('8')` | `5`, `8` |
+    | New microtask from above | Inner `Promise.then`: `console.log('7')` | `7` |
+    | First macrotask | `setTimeout` outer callback: `console.log('1')`, `console.log('4')` | `1`, `4` |
+    | Microtask from macrotask | Inner `Promise.then`: `console.log('3')` | `3` |
+    | Next macrotask | `console.log('6')` (registered during step 5) | `6` |
+    | Final macrotask | `console.log('2')` (registered during step 6) | `2` |
+
+    <Warning>
+      Microtasks from `Promise.resolve().then()` always run before the next `setTimeout` callback, even if the `setTimeout` was registered first. This ordering is a common source of bugs and interview surprises.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="How do Promise.all, Promise.allSettled, Promise.race, and Promise.any differ?">
+    These static methods all accept an iterable of Promises and differ in how they react to fulfillment and rejection.
+
+    <CodeGroup>
+    ```javascript Promise.all
+    // Fulfills when ALL promises fulfill; rejects immediately if ANY rejects
+    const [user, orders] = await Promise.all([fetchUser(), fetchOrders()]);
+    // Use when: all results are needed and any failure should abort the operation
+    ```
+
+    ```javascript Promise.allSettled
+    // Always fulfills; waits for ALL promises to settle (no short-circuit)
+    const results = await Promise.allSettled([fetchA(), fetchB(), fetchC()]);
+    results.forEach(r => {
+      if (r.status === 'fulfilled') console.log(r.value);
+      else console.error(r.reason);
+    });
+    // Use when: you want every result regardless of individual failures
+    ```
+
+    ```javascript Promise.race
+    // Settles (fulfill or reject) as soon as the FIRST promise settles
+    const result = await Promise.race([fetch('/fast'), fetch('/slow')]);
+    // Use when: you want whichever response arrives first (e.g. timeout patterns)
+    ```
+
+    ```javascript Promise.any
+    // Fulfills as soon as ANY promise fulfills; rejects only if ALL reject
+    const first = await Promise.any([p1, p2, p3]);
+    // Use when: you have multiple fallbacks and need the first success
+    ```
+    </CodeGroup>
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Prefer `async/await` for application-level async logic — it is easier to read and debug. Reserve raw `.then()` chains for utility functions and library code where composability matters more than linear readability.
+</Tip>

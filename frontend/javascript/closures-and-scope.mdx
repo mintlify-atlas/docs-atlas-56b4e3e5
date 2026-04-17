@@ -1,0 +1,186 @@
+---
+title: "JavaScript Closures and Scope Interview Questions"
+description: "Master JavaScript closures, lexical scope, and class access modifiers with real interview Q&A drawn from the Maeil Mail frontend archive."
+---
+
+Closures are one of JavaScript's most powerful and frequently misunderstood features. They arise from the combination of JavaScript's first-class functions and its lexical scoping rules — a function "remembers" the environment in which it was created, even after that environment has finished executing. Understanding closures is essential for writing robust, maintainable JavaScript and is a staple topic in frontend interviews.
+
+<AccordionGroup>
+  <Accordion title="What is a closure, and how does it work?">
+    A **closure** is the ability of a function to remember the scope in which it was declared, and to access variables from that scope even after the outer function has returned.
+
+    JavaScript closures emerge from two language characteristics: **first-class functions** (functions can be stored in variables, passed as arguments, and returned from other functions) and **lexical scoping** (a function's scope is determined by where it is written in the source code, not where it is called).
+
+    ```javascript
+    function outerFunction(outerVariable) {
+      return function innerFunction(innerVariable) {
+        console.log('Outer Variable: ' + outerVariable);
+        console.log('Inner Variable: ' + innerVariable);
+      };
+    }
+
+    const newFunction = outerFunction('outside');
+    newFunction('inside');
+    // Outer Variable: outside
+    // Inner Variable: inside
+    ```
+
+    Here, `innerFunction` is defined inside `outerFunction`. When `outerFunction` finishes executing, its local scope would normally be destroyed — but because `innerFunction` holds a reference to it, the scope is kept alive. `innerFunction` can therefore still read `outerVariable` long after `outerFunction` has returned.
+  </Accordion>
+
+  <Accordion title="When and why would you use closures in practice?">
+    Closures solve three common problems in JavaScript:
+
+    **1. Data hiding (encapsulation)**
+
+    Closures let you create private variables that cannot be accessed from outside the function. Only the exposed functions can read or modify them, protecting data integrity.
+
+    ```javascript
+    function createCounter() {
+      let count = 0; // private — inaccessible from outside
+
+      return {
+        increment() { count++; },
+        decrement() { count--; },
+        getCount() { return count; },
+      };
+    }
+
+    const counter = createCounter();
+    counter.increment();
+    counter.increment();
+    console.log(counter.getCount()); // 2
+    console.log(counter.count);      // undefined — no direct access
+    ```
+
+    **2. Preserving state across asynchronous operations**
+
+    When a callback runs asynchronously, closures allow it to reference the variable values that existed at the time it was created.
+
+    ```javascript
+    function createLogger(name) {
+      return function () {
+        console.log(`Logger: ${name}`);
+      };
+    }
+
+    const logger = createLogger('MyApp');
+    setTimeout(logger, 1000); // 'Logger: MyApp' — name is still accessible
+    ```
+
+    **3. Module pattern**
+
+    Before ES modules, closures were the idiomatic way to encapsulate a module's internals and expose only a public API.
+
+    ```javascript
+    const userModule = (function () {
+      let _name = 'anonymous'; // private
+
+      return {
+        setName(name) { _name = name; },
+        getName() { return _name; },
+      };
+    })();
+
+    userModule.setName('Alice');
+    console.log(userModule.getName()); // 'Alice'
+    ```
+  </Accordion>
+
+  <Accordion title="What are JavaScript class access modifiers (public, private, protected)?">
+    Access modifiers control which parts of a program can read or write a class member.
+
+    **Public** — the default. Members without any modifier keyword are public and can be accessed freely from outside the class.
+
+    ```javascript
+    class User {
+      constructor(name) {
+        this.name = name; // public
+      }
+    }
+
+    const u = new User('Alice');
+    console.log(u.name); // 'Alice'
+    ```
+
+    **Private** — prefix the member name with `#`. The member is only accessible inside the class body; subclasses cannot reach it either.
+
+    ```javascript
+    class BankAccount {
+      #balance = 0; // private
+
+      deposit(amount) { this.#balance += amount; }
+      getBalance() { return this.#balance; }
+    }
+
+    const account = new BankAccount();
+    account.deposit(100);
+    console.log(account.getBalance()); // 100
+    console.log(account.#balance);     // SyntaxError
+    ```
+
+    **Protected** — JavaScript has no native `protected` keyword. By convention, developers prefix members with `_` to signal "treat this as protected — do not access it from outside the class hierarchy." This is purely a social contract; the runtime does not enforce it.
+
+    ```javascript
+    class Animal {
+      _sound = 'generic sound'; // "protected" by convention
+    }
+    ```
+
+    <Note>
+      TypeScript provides first-class `public`, `private`, and `protected` keywords that are enforced at compile time. It also offers **parameter properties**, which automatically declare and initialise a member from a constructor parameter: `constructor(public name: string, private age: number) {}`.
+    </Note>
+
+    **TypeScript example**
+
+    ```ts
+    class Foo {
+      public a: string;    // subclass: ✓  outside: ✓
+      private b: number;   // subclass: ✗  outside: ✗
+      protected c: boolean; // subclass: ✓  outside: ✗
+
+      constructor(a: string, b: number, c: boolean) {
+        this.a = a;
+        this.b = b;
+        this.c = c;
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is lexical scope and how does the scope chain work?">
+    **Lexical scope** means that the accessible variables of a function are determined by its physical location in the source code, not by where or how it is invoked.
+
+    When JavaScript looks up a variable, it starts in the current scope. If the variable is not found, it moves outward to the enclosing scope, and continues up the chain until it either finds the variable or reaches the global scope. This connected series of scopes is called the **scope chain**.
+
+    ```javascript
+    const globalVar = 'global';
+
+    function outer() {
+      const outerVar = 'outer';
+
+      function inner() {
+        const innerVar = 'inner';
+        // inner can see: innerVar, outerVar, globalVar
+        console.log(innerVar);  // 'inner'
+        console.log(outerVar);  // 'outer'
+        console.log(globalVar); // 'global'
+      }
+
+      inner();
+    }
+
+    outer();
+    ```
+
+    Each execution context stores a reference to its outer (parent) lexical environment. This is the mechanism that makes closures possible — the inner function retains a live reference to its parent scope via the scope chain.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  A common interview pitfall is the classic `var` loop-closure bug. Using `var` in a `for` loop shares a single binding across all iterations, so every closure captures the same (final) value. The fix is to use `let` (which creates a new binding per iteration) or an IIFE to capture the current value explicitly.
+</Tip>
+
+<Note>
+  Closures keep the outer scope alive as long as the inner function is reachable. In long-running applications, holding large objects in a closure you no longer need can cause memory leaks. Always review whether a closure's referenced data can be released.
+</Note>
